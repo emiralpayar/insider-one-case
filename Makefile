@@ -11,7 +11,7 @@ test-db-down:
 
 test: test-db-up
 	cd backend && TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test ./...
-	@if [ -f frontend/package.json ]; then cd frontend && npm test; else echo "frontend: skipped (no package.json)"; fi
+	@if [ -f frontend/package.json ]; then cd frontend && { [ -d node_modules ] || npm ci; } && npm test; else echo "frontend: skipped (no package.json)"; fi
 
 # Whole system in the background; returns once every service is healthy.
 up:

@@ -6,6 +6,7 @@ const MESSAGES: Record<string, string> = {
   llm_not_configured: 'Claude API anahtarı tanımlı değil; Claude gerektiren adımlar çalışmaz. Kuralı elle kurabilirsiniz.',
   llm_invalid_output: 'Claude onarım denemelerinden sonra da geçerli bir çıktı üretemedi.',
   llm_refused: 'Claude bu isteği yanıtlamayı reddetti. Brief\'i ya da talimatı değiştirip tekrar deneyin.',
+  llm_truncated: "Claude'un yanıtı uzunluk sınırında kesildi; tekrar deneyin.",
   llm_error: 'Claude çağrısı başarısız oldu (zaman aşımı ya da bağlantı). Tekrar deneyin.',
   validation_failed: 'Doğrulama başarısız; işaretli alanları düzeltin.',
   campaign_locked: 'Kampanya onaylandı; artık düzenlenemez.',

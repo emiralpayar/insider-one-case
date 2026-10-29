@@ -110,6 +110,7 @@ async function approve() {
         <p v-if="campaign.rule?.explanation" class="small">
           <span class="muted">Claude'un yorumu:</span> {{ campaign.rule.explanation }}
         </p>
+        <p v-else-if="campaign.rule" class="small muted">Kural elle düzenlendi.</p>
         <ul class="rule-lines">
           <li v-for="l in campaign.rule ? describeRule(campaign.rule) : []" :key="l">{{ l }}</li>
         </ul>

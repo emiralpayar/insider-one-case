@@ -6,6 +6,8 @@ Kararlar ve gerekçeleri: [DECISIONS.md](DECISIONS.md) · Tasarım dokümanı: [
 
 ## Hızlı başlangıç
 
+**Gereksinimler:** `docker compose up` için yalnızca Docker (Compose v2). `make test` için ek olarak Go ≥ 1.24 ve Node 22.
+
 ```bash
 cp .env.example .env        # isteğe bağlı; ANTHROPIC_API_KEY'i buraya yazın
 docker compose up --build
@@ -149,7 +151,7 @@ CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race
 - **Mock provider'ın idempotency kayıtları bellekte:** provider container'ı yeniden başlarsa sıfırlanır.
 - **Efektif tavan ≈95 msg/sn/kanal:** limiter 50 ms güvenlik payı tutar ki provider tarafındaki her 1 sn penceresinde 100 aşılmasın.
 - **Liderlik devrinde kısa çakışma:** lider kilit bağlantısını kaybederse, eski liderin uçuştaki (en fazla eşzamanlılık kadar, her biri 5 sn timeout'lu) istekleri yeni liderin ilk istekleriyle çakışabilir; provider'ın 429'u yedek koruma.
-- **İzin iş alma anında okunur:** iş alındıktan sonraki milisaniyelerde izin geri çekilirse o mesaj yine gider.
+- **İzin iş alma anında okunur:** izin, mesajı kuyruktan alan sorguda okunur; normalde gönderimden 1 sn'den kısa süre önce, provider'ın Retry-After duraklaması sırasında ise ~10 sn'ye kadar önce. Bu aralıkta izin geri çekilirse o mesaj yine gider.
 - **Preheader mesaj başına saklanmaz:** `messages` satırında konu ve gövde render edilip saklanır; preheader kampanya içeriğinde kalır ve provider'a gönderilmez.
 
 ## Repo yapısı

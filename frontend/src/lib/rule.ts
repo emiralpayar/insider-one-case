@@ -116,6 +116,11 @@ export const WORST_CASE_FIRST_NAME = 'Abdurrahman Muhammed'
  */
 export function validateLocal(r: Rule): VError[] {
   const errs: VError[] = []
+  // "Everyone" is never implied by an empty list (DECISIONS #8); same as the
+  // backend's empty_conditions.
+  if (r.audience === 'filtered' && r.conditions.length === 0) {
+    errs.push({ path: 'conditions', code: 'empty_conditions', message: 'En az bir koşul ekleyin ya da açıkça "Tüm kullanıcılar"ı seçin' })
+  }
   r.conditions.forEach((c, i) => {
     const spec = FIELDS[c.field]
     const path = `conditions[${i}].value`

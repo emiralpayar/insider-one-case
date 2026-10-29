@@ -4,7 +4,8 @@
 #   worker x2     metrics on host ports 9091-9092 (/metrics, /healthz)
 #   mock-provider http://localhost:8081   fake SMS/email provider with fault injection
 #   postgres      state + queue (not published; `docker compose exec postgres psql -U composer`)
-# Optional settings come from .env (see .env.example); everything has a default.
+# Optional settings come from .env (see .env.example), which Compose reads for
+# ${VAR:-default} interpolation; everything has a default.
 # Without ANTHROPIC_API_KEY the system still starts: LLM endpoints answer 503 and the UI
 # shows a red banner. LLM_PROVIDER=mock is an explicit keyless demo mode (orange banner).
 
@@ -33,9 +34,8 @@ services:
   api:
     <<: *backend
     command: ["api"]
-    env_file: # optional; only the api needs the LLM settings
-      - path: .env
-        required: false
+    # LLM settings reach only the api; values are interpolated from the shell
+    # or the auto-read .env, so no env_file (and no Compose >=2.24) is needed.
     environment:
       DATABASE_URL: postgres://composer:composer@postgres:5432/composer?sslmode=disable
       PORT: "8080"

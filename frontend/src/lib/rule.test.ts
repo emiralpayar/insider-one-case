@@ -37,4 +37,8 @@ describe('validateLocal', () => {
     ] })
     expect(errs.map((e) => e.path)).toEqual(['conditions[0].value', 'conditions[1].value'])
   })
+  it('rejects a filtered rule without conditions; "all" must be explicit', () => {
+    expect(validateLocal({ audience: 'filtered', unmapped: [], explanation: '', conditions: [] }).map((e) => e.code)).toEqual(['empty_conditions'])
+    expect(validateLocal({ audience: 'all', unmapped: [], explanation: '', conditions: [] })).toEqual([])
+  })
 })

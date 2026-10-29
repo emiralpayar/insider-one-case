@@ -26,7 +26,9 @@ const generating = ref(false)
 const genError = ref<unknown>(null)
 const saving = ref(false)
 const saveError = ref<unknown>(null)
-const handEdited = ref(false)
+// The rule differs from what Claude produced (form edits, or saved that way:
+// a hand-edited rule is saved with an empty explanation).
+const handEdited = ref(!!props.campaign.rule && !props.campaign.rule.explanation)
 
 const refineBusy = ref(false)
 const refineError = ref<unknown>(null)
@@ -125,8 +127,15 @@ function updateCond(i: number, c: Condition) {
 }
 function removeCond(i: number) {
   if (!draft.value) return
+  // Removing the last condition leaves an invalid filtered rule (shown
+  // inline); targeting everyone is an explicit choice (selectAll).
   draft.value.conditions.splice(i, 1)
-  if (draft.value.conditions.length === 0) draft.value.audience = 'all'
+  handEdited.value = true
+}
+function selectAll() {
+  if (!draft.value) return
+  draft.value.audience = 'all'
+  draft.value.conditions = []
   handEdited.value = true
 }
 function addCond() {
@@ -138,7 +147,10 @@ function addCond() {
   handEdited.value = true
 }
 function discard() {
-  if (props.campaign.rule) draft.value = clone(props.campaign.rule)
+  if (props.campaign.rule) {
+    draft.value = clone(props.campaign.rule)
+    handEdited.value = !props.campaign.rule.explanation
+  }
   livePreview.value = props.preview
   serverErrors.value = {}
 }
@@ -148,7 +160,9 @@ async function save(rule: Rule, fromClaude = false): Promise<boolean> {
   saving.value = true
   saveError.value = null
   try {
-    applySaved(await api.putSegment(props.campaign.id, rule), fromClaude)
+    // Claude's explanation no longer describes a hand-edited rule: drop it.
+    const body = fromClaude || !handEdited.value ? rule : { ...rule, explanation: '' }
+    applySaved(await api.putSegment(props.campaign.id, body), fromClaude)
     return true
   } catch (e) {
     if (e instanceof ApiError && e.code === 'campaign_locked') emit('locked')
@@ -222,6 +236,7 @@ async function acceptProposal() {
           Kural form ile değiştirildi; bu açıklama Claude'un yorumudur, aşağıdaki koşullar geçerlidir.
         </p>
       </div>
+      <p v-else-if="handEdited && campaign.rule" class="small muted">Kural elle düzenlendi.</p>
 
       <div class="card">
         <div class="card-title">
@@ -229,7 +244,7 @@ async function acceptProposal() {
           <span class="muted small">Tüm koşullar <strong>VE</strong> ile birleşir</span>
         </div>
         <div class="stack-sm">
-          <div v-if="draft.conditions.length === 0" class="alert alert-info">
+          <div v-if="draft.audience === 'all'" class="alert alert-info">
             <span class="alert-icon">i</span>
             <div class="alert-body">Koşul yok — <strong>tüm kullanıcılar</strong> hedefleniyor.</div>
           </div>
@@ -244,7 +259,18 @@ async function acceptProposal() {
           />
           <div v-for="m in ruleLevelErrors" :key="m" class="field-error">{{ m }}</div>
           <div class="row-between">
-            <button type="button" class="btn btn-sm" :disabled="saving || !!proposal" @click="addCond">+ Koşul ekle</button>
+            <div class="row" style="gap: 8px">
+              <button type="button" class="btn btn-sm" :disabled="saving || !!proposal" @click="addCond">+ Koşul ekle</button>
+              <button
+                v-if="draft.audience !== 'all'"
+                type="button"
+                class="btn btn-ghost btn-sm"
+                :disabled="saving || !!proposal"
+                @click="selectAll"
+              >
+                Tüm kullanıcılar
+              </button>
+            </div>
             <div v-if="dirty" class="row" style="gap: 8px">
               <span class="badge badge-warn">Kaydedilmemiş değişiklik</span>
               <button v-if="campaign.rule" type="button" class="btn btn-ghost btn-sm" @click="discard">Geri al</button>
