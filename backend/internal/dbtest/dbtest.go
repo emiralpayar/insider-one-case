@@ -40,7 +40,10 @@ func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	base := os.Getenv("TEST_DATABASE_URL")
 	if base == "" {
-		t.Fatal("TEST_DATABASE_URL is not set (run `make test`)")
+		if os.Getenv("CI") == "true" {
+			t.Fatal("TEST_DATABASE_URL is not set")
+		}
+		t.Skip("TEST_DATABASE_URL is not set (run `make test`)")
 	}
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, base)
@@ -72,6 +75,9 @@ func New(t *testing.T) *pgxpool.Pool {
 	mu.Unlock()
 
 	t.Cleanup(func() {
+		mu.Lock()
+		delete(urls, t)
+		mu.Unlock()
 		pool.Close()
 		c, err := pgx.Connect(ctx, base)
 		if err != nil {
@@ -79,9 +85,6 @@ func New(t *testing.T) *pgxpool.Pool {
 		}
 		defer c.Close(ctx)
 		_, _ = c.Exec(ctx, "drop database if exists "+name+" with (force)")
-		mu.Lock()
-		delete(urls, t)
-		mu.Unlock()
 	})
 	return pool
 }
