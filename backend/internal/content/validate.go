@@ -19,6 +19,17 @@ const (
 	defaultLongestCity      = "Kahramanmaraş"
 )
 
+// WithDefaults fills empty fields with the default worst-case values.
+func (wc WorstCase) WithDefaults() WorstCase {
+	if wc.LongestFirstName == "" {
+		wc.LongestFirstName = defaultLongestFirstName
+	}
+	if wc.LongestCity == "" {
+		wc.LongestCity = defaultLongestCity
+	}
+	return wc
+}
+
 func has(channels []string, ch string) bool {
 	for _, c := range channels {
 		if c == ch {
@@ -31,12 +42,7 @@ func has(channels []string, ch string) bool {
 // Validate checks c for the selected channels: required fields, placeholder
 // syntax and worst-case length limits.
 func Validate(c Content, channels []string, wc WorstCase) verr.List {
-	if wc.LongestFirstName == "" {
-		wc.LongestFirstName = defaultLongestFirstName
-	}
-	if wc.LongestCity == "" {
-		wc.LongestCity = defaultLongestCity
-	}
+	wc = wc.WithDefaults()
 	var errs verr.List
 	if has(channels, "sms") {
 		errs = append(errs, checkField("sms", c.SMS, true, SMSMaxChars, "sms_too_long",

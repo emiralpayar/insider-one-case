@@ -115,11 +115,6 @@ func mockSegment(brief string) segment.Rule {
 			r.Unmapped = append(r.Unmapped, w)
 		}
 	}
-	if allRe.MatchString(f) {
-		r.Audience = "all"
-		r.Explanation = "Tüm kullanıcılar (mock)"
-		return r
-	}
 	days := 30
 	if m := daysRe.FindStringSubmatch(f); m != nil {
 		fmt.Sscan(m[1], &days)
@@ -136,6 +131,13 @@ func mockSegment(brief string) segment.Rule {
 	if purchasedRe.MatchString(f) {
 		r.Conditions = append(r.Conditions, segment.Condition{Field: "purchased", Op: "within_days", Value: rawJSON(days)})
 		parts = append(parts, fmt.Sprintf("son %d günde alışveriş yapmış", days))
+	}
+	// "herkes" means everyone only when nothing narrows the audience
+	// ("İstanbul'daki herkese" is still a city filter).
+	if len(r.Conditions) == 0 && allRe.MatchString(f) {
+		r.Audience = "all"
+		r.Explanation = "Tüm kullanıcılar (mock)"
+		return r
 	}
 	if len(parts) == 0 {
 		r.Explanation = "Brief'ten tanınan bir kitle koşulu çıkarılamadı (mock)"

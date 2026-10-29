@@ -233,16 +233,63 @@ func TestClientErrorIsLoggedAndReturned(t *testing.T) {
 }
 
 func TestRefusalNotRepaired(t *testing.T) {
-	c := &Composer{SegmentClient: refusingClient{}, Log: &memLog{}, MaxRepairs: 2}
+	rc := &refusingClient{}
+	l := &memLog{}
+	c := &Composer{SegmentClient: rc, Log: l, MaxRepairs: 2}
 	_, err := c.Segment(context.Background(), uuid.New(), "brief")
 	if !errors.Is(err, ErrRefusal) {
 		t.Fatalf("err = %v, want ErrRefusal", err)
 	}
+	if rc.calls != 1 || len(l.recs) != 1 || l.recs[0].Err == "" {
+		t.Fatalf("calls = %d logs = %+v", rc.calls, l.recs)
+	}
 }
 
-type refusingClient struct{}
+type refusingClient struct{ calls int }
 
-func (refusingClient) Complete(context.Context, Request, func(string)) (Response, error) {
+func (r *refusingClient) Complete(context.Context, Request, func(string)) (Response, error) {
+	r.calls++
 	return Response{StopReason: "refusal"}, ErrRefusal
 }
-func (refusingClient) Name() string { return "refusing" }
+func (*refusingClient) Name() string { return "refusing" }
+
+type failingLog struct{ n int }
+
+func (f *failingLog) Log(context.Context, CallRecord) error { f.n++; return errors.New("db down") }
+
+func TestCallLoggerErrorDoesNotBreakFlow(t *testing.T) {
+	s := NewScripted(`{"audience":"all","conditions":[],"unmapped":[],"explanation":"x"}`)
+	fl := &failingLog{}
+	c := &Composer{SegmentClient: s, Log: fl, MaxRepairs: 2}
+	r, err := c.Segment(context.Background(), uuid.New(), "herkes")
+	if err != nil || r.Audience != "all" {
+		t.Fatalf("rule = %+v err = %v", r, err)
+	}
+	if fl.n != 1 {
+		t.Fatalf("log attempts = %d", fl.n)
+	}
+}
+
+func TestRepairWithEmptyOutputUsesPlaceholder(t *testing.T) {
+	s := NewScripted("", validRule)
+	if _, err := newComposer(s, &memLog{}).Segment(context.Background(), uuid.New(), "brief"); err != nil {
+		t.Fatal(err)
+	}
+	msgs := s.Calls()[1].Messages
+	if a := msgs[len(msgs)-2]; a.Role != "assistant" || a.Text != "(boş çıktı)" {
+		t.Fatalf("assistant turn = %+v", a)
+	}
+}
+
+func TestContentPromptUsesWorstCase(t *testing.T) {
+	s := NewScripted(`{"sms":"Merhaba {{first_name}}!"}`)
+	wc := content.WorstCase{LongestFirstName: "Abcdefghijklmnopqrstuvwxyzab", LongestCity: "Xyz"}
+	if _, err := newComposer(s, &memLog{}).Content(context.Background(), uuid.Nil, "brief", segment.Rule{Audience: "all"},
+		[]string{"sms"}, wc, nil); err != nil {
+		t.Fatal(err)
+	}
+	sys := s.Calls()[0].System
+	if !strings.Contains(sys, "isim 28") || !strings.Contains(sys, "şehir 3 karakter") {
+		t.Fatalf("system prompt lacks worst-case lengths: %q", sys)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/emiralpayar/campaign-composer/internal/content"
 	"github.com/emiralpayar/campaign-composer/internal/segment"
@@ -35,21 +36,28 @@ Bilinen şehirler (yalnızca bunlar, bu yazımla): ` + strings.Join(segment.Citi
 Kurallar:
 - audience "all" yalnızca brief açıkça herkesi/tüm kullanıcıları istiyorsa; o zaman conditions boş dizi olur.
 - Aksi halde audience "filtered" ve en az bir koşul.
+- Aynı alanda çelişen koşullar geçersizdir: in listesindeki tüm şehirlerin not_in'de de olması, ortak şehri olmayan iki city in, farklı değerli iki language eq, gte değerinin lte'den büyük olması, purchased not_within_days N ile within_days W'de N ≥ W. Aynı alan için tek, tutarlı koşul yaz.
 - Brief'te karşılığı olmayan kitle ifadeleri (ör. "VIP", "sadık müşteriler", "genç kullanıcılar") ASLA sessizce atlanmaz ve uydurma bir koşula çevrilmez: kısa Türkçe ifadeleriyle "unmapped" dizisine yaz. İndirim oranı, ton, kanal gibi mesaj içeriğine ait kısımlar kitle değildir; unmapped'e yazma.
 - explanation: kitleyi nasıl anladığını pazarlamacının okuyacağı tek bir Türkçe cümleyle açıkla.
 
 ` + untrustedNote
 
-var contentSystem = fmt.Sprintf(`Bir pazarlama platformu için Türkçe kampanya mesajı yazan bir metin yazarısın. Çıktın, verilen JSON şemasına uyan TEK bir JSON nesnesidir; yalnızca şemadaki alanları üret, açıklama veya markdown ekleme.
+// contentSystem is the content system prompt with the campaign's real
+// worst-case placeholder lengths.
+func contentSystem(wc content.WorstCase) string {
+	wc = wc.WithDefaults()
+	return fmt.Sprintf(`Bir pazarlama platformu için Türkçe kampanya mesajı yazan bir metin yazarısın. Çıktın, verilen JSON şemasına uyan TEK bir JSON nesnesidir; yalnızca şemadaki alanları üret, açıklama veya markdown ekleme.
 
 Kurallar:
 - Dil her zaman Türkçe. Tonu, teklifi (indirim oranı vb.) ve aciliyeti brief'ten al; brief'te olmayan teklif, kod veya tarih uydurma.
 - Yalnızca iki değişken var: {{first_name}} ve {{city}}. Başka değişken (ör. {{phone}}, {{discount}}) KULLANMA; tek süslü parantez kullanma.
-- Uzunluk değişkenler en uzun değerle (isim ~20, şehir ~13 karakter) doldurularak ölçülür: SMS en fazla %d karakter, e-posta konusu en fazla %d karakter. SMS'i kısa tut (yaklaşık 120 karakter hedefle).
+- Uzunluk değişkenler en uzun değerle (bu kitlede isim %d, şehir %d karakter) doldurularak ölçülür: SMS en fazla %d karakter, e-posta konusu en fazla %d karakter. SMS'i kısa tut (yaklaşık 120 karakter hedefle).
 - İsim boş olabilir; cümle isimsiz de doğal okunmalı. "Merhaba {{first_name}}," kalıbı uygundur (isim boşsa "Merhaba," olur). İsmi cümlenin ortasına gömme.
 - E-posta: konu kısa ve çekici; preheader konuyu tamamlayan tek cümle; gövde sade metin, kısa paragraflar, net bir eylem çağrısı.
 
-`, content.SMSMaxChars, content.SubjectMaxChars) + untrustedNote
+`, utf8.RuneCountInString(wc.LongestFirstName), utf8.RuneCountInString(wc.LongestCity),
+		content.SMSMaxChars, content.SubjectMaxChars) + untrustedNote
+}
 
 func briefBlock(brief string) string {
 	return "<brief>\n" + brief + "\n</brief>"

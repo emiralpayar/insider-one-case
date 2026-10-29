@@ -18,6 +18,13 @@ import (
 // DefaultMaxRepairs is used when Composer.MaxRepairs is zero.
 const DefaultMaxRepairs = 2
 
+// logTimeout bounds a call-log write (it runs detached from request cancellation).
+const logTimeout = 2 * time.Second
+
+// emptyOutput stands in for an empty model answer in the repair history; the
+// API rejects empty text blocks.
+const emptyOutput = "(boş çıktı)"
+
 // Composer runs the generate → parse → validate → repair loop on top of the
 // model clients. Segment and refine use SegmentClient; content uses
 // ContentClient.
@@ -98,7 +105,7 @@ func (c *Composer) Content(ctx context.Context, campaignID uuid.UUID, brief stri
 	}
 	req := Request{
 		Purpose:  "content",
-		System:   contentSystem,
+		System:   contentSystem(wc),
 		Messages: []Message{{Role: "user", Text: contentUserPrompt(brief, rule, channels)}},
 		Schema:   content.JSONSchema(channels),
 		Hint:     map[string]any{"brief": brief, "rule": rule, "channels": channels},
@@ -186,11 +193,15 @@ func (c *Composer) run(ctx context.Context, client Client, campaignID uuid.UUID,
 		if attempt == attempts {
 			break
 		}
+		prev := resp.Text
+		if strings.TrimSpace(prev) == "" {
+			prev = emptyOutput
+		}
 		errJSON, _ := json.Marshal(lastErrs)
 		msgs := make([]Message, 0, len(req.Messages)+2)
 		msgs = append(msgs, req.Messages...)
 		msgs = append(msgs,
-			Message{Role: "assistant", Text: resp.Text},
+			Message{Role: "assistant", Text: prev},
 			Message{Role: "user", Text: repairPrompt(errJSON)})
 		req.Messages = msgs
 		if onRepair != nil {
@@ -206,7 +217,9 @@ func (c *Composer) log(ctx context.Context, rec CallRecord) {
 	if c.Log == nil {
 		return
 	}
-	if err := c.Log.Log(context.WithoutCancel(ctx), rec); err != nil {
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), logTimeout)
+	defer cancel()
+	if err := c.Log.Log(lctx, rec); err != nil {
 		slog.Error("llm call log failed", "purpose", rec.Purpose, "attempt", rec.Attempt, "err", err)
 	}
 }

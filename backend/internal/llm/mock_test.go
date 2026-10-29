@@ -166,3 +166,16 @@ func TestMockThroughComposer(t *testing.T) {
 		t.Fatalf("sms-only content = %+v", cc)
 	}
 }
+
+func TestMockAllWordWithConditionsStaysFiltered(t *testing.T) {
+	r := mockRule(t, Request{Purpose: "segment", Hint: map[string]any{"brief": "İstanbul'daki herkese %20 indirim gönder"}})
+	if r.Audience != "filtered" {
+		t.Fatalf("audience = %q, want filtered (%+v)", r.Audience, r)
+	}
+	if c := cond(r, "city"); c == nil || c.Op != "in" || string(c.Value) != `["İstanbul"]` {
+		t.Fatalf("city = %+v", c)
+	}
+	if _, errs := segment.Validate(r); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+}

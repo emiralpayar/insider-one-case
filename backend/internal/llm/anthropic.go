@@ -41,7 +41,7 @@ func (a *anthropicClient) Complete(ctx context.Context, req Request, onDelta fun
 	for stream.Next() {
 		event := stream.Current()
 		if err := msg.Accumulate(event); err != nil {
-			return Response{}, fmt.Errorf("llm: anthropic: accumulate: %w", err)
+			return a.response(&msg), fmt.Errorf("llm: anthropic: accumulate: %w", err)
 		}
 		if onDelta == nil {
 			continue
@@ -52,14 +52,28 @@ func (a *anthropicClient) Complete(ctx context.Context, req Request, onDelta fun
 			}
 		}
 	}
+	resp := a.response(&msg)
 	if err := stream.Err(); err != nil {
-		return Response{}, fmt.Errorf("llm: anthropic: %w", err)
+		// Return what arrived so the call log row is not empty.
+		return resp, fmt.Errorf("llm: anthropic: %w", err)
 	}
+	switch msg.StopReason {
+	case anthropic.StopReasonRefusal:
+		return resp, fmt.Errorf("%w (category %q)", ErrRefusal, msg.StopDetails.Category)
+	case anthropic.StopReasonMaxTokens:
+		return resp, fmt.Errorf("llm: anthropic: output truncated at max_tokens")
+	}
+	return resp, nil
+}
 
+// response converts a (possibly partially) accumulated message.
+func (a *anthropicClient) response(msg *anthropic.Message) Response {
 	var text strings.Builder
 	for _, block := range msg.Content {
-		if tb, ok := block.AsAny().(anthropic.TextBlock); ok {
-			text.WriteString(tb.Text)
+		// Read the union fields directly: AsAny() decodes the raw JSON, which
+		// Accumulate refreshes only at content_block_stop.
+		if block.Type == "text" {
+			text.WriteString(block.Text)
 		}
 	}
 	resp := Response{
@@ -72,13 +86,7 @@ func (a *anthropicClient) Complete(ctx context.Context, req Request, onDelta fun
 	if resp.Model == "" {
 		resp.Model = a.model
 	}
-	switch msg.StopReason {
-	case anthropic.StopReasonRefusal:
-		return resp, fmt.Errorf("%w (category %q)", ErrRefusal, msg.StopDetails.Category)
-	case anthropic.StopReasonMaxTokens:
-		return resp, fmt.Errorf("llm: anthropic: output truncated at max_tokens")
-	}
-	return resp, nil
+	return resp
 }
 
 // buildParams maps a Request to Messages API params: structured output via
