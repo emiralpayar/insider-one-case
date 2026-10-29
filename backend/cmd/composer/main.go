@@ -3,13 +3,22 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/emiralpayar/campaign-composer/internal/api"
 	"github.com/emiralpayar/campaign-composer/internal/db"
+	"github.com/emiralpayar/campaign-composer/internal/llm"
 	"github.com/emiralpayar/campaign-composer/internal/seed"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 func main() {
@@ -48,7 +57,10 @@ func main() {
 			log.Fatalf("worker: %v", err)
 		}
 	case "api":
-		log.Fatalf("%s: not implemented", os.Args[1])
+		mustURL(url)
+		if err := runAPI(url); err != nil {
+			log.Fatalf("api: %v", err)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
 		os.Exit(2)
@@ -59,4 +71,104 @@ func mustURL(u string) {
 	if u == "" {
 		log.Fatal("DATABASE_URL is not set")
 	}
+}
+
+const defaultModel = "claude-sonnet-5-5"
+
+// selectLLM builds the Composer from the environment. LLM_PROVIDER defaults to
+// anthropic; without ANTHROPIC_API_KEY the Composer is nil (LLM endpoints
+// answer 503) — there is deliberately no silent fallback to the mock.
+func selectLLM(pool *pgxpool.Pool) (provider string, models api.Models, c *llm.Composer, err error) {
+	provider = envOr("LLM_PROVIDER", "anthropic")
+	models = api.Models{
+		Segment: envOr("ANTHROPIC_MODEL_SEGMENT", defaultModel),
+		Content: envOr("ANTHROPIC_MODEL_CONTENT", defaultModel),
+	}
+	switch provider {
+	case "anthropic":
+		key := os.Getenv("ANTHROPIC_API_KEY")
+		if key == "" {
+			log.Printf("LLM: provider=anthropic NOT CONFIGURED (ANTHROPIC_API_KEY is empty); LLM endpoints will return 503")
+			return provider, models, nil, nil
+		}
+		log.Printf("LLM: provider=anthropic segment_model=%s content_model=%s", models.Segment, models.Content)
+		return provider, models, &llm.Composer{
+			SegmentClient: llm.NewAnthropic(key, models.Segment),
+			ContentClient: llm.NewAnthropic(key, models.Content),
+			Log:           llm.NewPGCallLogger(pool),
+		}, nil
+	case "mock":
+		models = api.Models{Segment: "mock", Content: "mock"}
+		log.Printf("LLM: provider=mock (LLM_PROVIDER=mock) — deterministic fixtures, NOT a real model")
+		return provider, models, &llm.Composer{
+			SegmentClient: llm.NewMock(), ContentClient: llm.NewMock(), Log: llm.NewPGCallLogger(pool),
+		}, nil
+	default:
+		return "", models, nil, fmt.Errorf("unknown LLM_PROVIDER %q (anthropic|mock)", provider)
+	}
+}
+
+// runAPI migrates, seeds an empty database and serves the HTTP API until
+// SIGTERM/SIGINT.
+func runAPI(dbURL string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+
+	if err := db.Migrate(ctx, dbURL); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	pool, err := db.Open(ctx, dbURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	res, err := seed.Run(ctx, pool, seed.Options{Now: time.Now()})
+	if err != nil {
+		return fmt.Errorf("seed: %w", err)
+	}
+	if res.Skipped {
+		log.Println("seed: database not empty, skipped")
+	} else {
+		log.Printf("seed: users=%d events=%d", res.Users, res.Events)
+	}
+
+	provider, models, composer, err := selectLLM(pool)
+	if err != nil {
+		return err
+	}
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	handler := api.New(api.Config{
+		Pool: pool, Composer: composer, LLMProvider: provider, Models: models, Registry: reg,
+	})
+
+	srv := &http.Server{
+		Addr:              ":" + envOr("PORT", "8080"),
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      0, // SSE content streams can run for a long time
+		IdleTimeout:       120 * time.Second,
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+	log.Printf("api listening on %s", srv.Addr)
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+	log.Println("api: shutting down")
+	sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	if err := srv.Shutdown(sctx); err != nil {
+		// Long-lived SSE streams did not finish in time; cut them.
+		log.Printf("api: graceful shutdown incomplete (%v); closing connections", err)
+		_ = srv.Close()
+	}
+	if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
+	github.com/go-chi/chi/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/pressly/goose/v3 v3.26.0
