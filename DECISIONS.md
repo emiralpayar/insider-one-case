@@ -21,6 +21,9 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 **Bedeli:** Bir kanalın gönderim kapasitesi tek bir process ile sınırlı. 100/sn için fazlasıyla yeterli. Çok daha yüksek limitlerde dağıtık rate limiter gerekir.
 
+- Limiter 50 ms güvenlik payı tutar (100 gönderim 1,05 sn'ye yayılır), bu yüzden efektif tavan ≈95/sn. Provider istekleri varış zamanına göre saydığı için ağ gecikmesindeki oynamalara rağmen provider tarafındaki her 1 sn penceresinde ≤100 garanti edilir.
+- Kilit bağlantısı koparsa liderlik devri sırasında eski liderin uçuştaki gönderimleri (en fazla `Concurrency` adet, her biri 5 sn timeout ile sınırlı) yeni liderin ilk gönderimleriyle kısa süre çakışabilir. Bu çakışma sınırlıdır; provider'ın 429'u yedek koruma sağlar. Lider her claim öncesi kilit bağlantısını kontrol ederek bu pencereyi daraltır.
+
 ## 3. Çift gönderim > hiç gitmeme: idempotency key
 
 **Karar:** Çift SMS, hiç gitmemesinden daha kötü kabul edildi.

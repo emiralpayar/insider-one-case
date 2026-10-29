@@ -3,7 +3,6 @@
 package queue
 
 import (
-	"context"
 	"errors"
 	"net"
 	"syscall"
@@ -61,10 +60,7 @@ func Classify(status int, err error) Outcome {
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
 			return OutcomeNotSent
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return OutcomeUncertain
-		}
-		return OutcomeUncertain
+		return OutcomeUncertain // timeouts (incl. context.DeadlineExceeded), resets, EOF, unknown
 	}
 	switch {
 	case status >= 200 && status < 300:

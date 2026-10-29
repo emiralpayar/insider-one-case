@@ -150,3 +150,25 @@ func (c *countingProvider) MinCalls(ids []uuid.UUID) int {
 	}
 	return min
 }
+
+// mustExec runs a setup statement and fails the test on error.
+func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), sql, args...); err != nil {
+		t.Fatalf("exec %q: %v", sql, err)
+	}
+}
+
+// claimAll claims every due row of channel and indexes the jobs by ID.
+func claimAll(t *testing.T, st *Store, channel string) map[uuid.UUID]Job {
+	t.Helper()
+	jobs, err := st.Claim(context.Background(), channel, 1000, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[uuid.UUID]Job{}
+	for _, j := range jobs {
+		out[j.ID] = j
+	}
+	return out
+}

@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -58,8 +59,8 @@ func TestClaimRecoversExpiredLease(t *testing.T) {
 	ids := insertMessages(t, pool, camp, "sms", 2)
 	ctx := context.Background()
 	// ids[0]: crashed mid-send (lease expired); ids[1]: in flight elsewhere (lease valid).
-	pool.Exec(ctx, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
-	pool.Exec(ctx, `update messages set status='sending', attempts=1, locked_until=now()+interval '30 seconds' where id=$1`, ids[1])
+	mustExec(t, pool, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
+	mustExec(t, pool, `update messages set status='sending', attempts=1, locked_until=now()+interval '30 seconds' where id=$1`, ids[1])
 
 	jobs, err := NewStore(pool).Claim(ctx, "sms", 10, lease)
 	if err != nil {
@@ -78,8 +79,8 @@ func TestClaimReturnsCurrentConsent(t *testing.T) {
 	camp := insertCampaign(t, pool, "sending")
 	ids := insertMessages(t, pool, camp, "sms", 2)
 	ctx := context.Background()
-	pool.Exec(ctx, `update users set sms_consent=true where id in (select user_id from messages where campaign_id=$1)`, camp)
-	pool.Exec(ctx, `update users set sms_consent=false where id=(select user_id from messages where id=$1)`, ids[0])
+	mustExec(t, pool, `update users set sms_consent=true where id in (select user_id from messages where campaign_id=$1)`, camp)
+	mustExec(t, pool, `update users set sms_consent=false where id=(select user_id from messages where id=$1)`, ids[0])
 
 	jobs, err := NewStore(pool).Claim(ctx, "sms", 10, lease)
 	if err != nil {
@@ -104,7 +105,7 @@ func TestMarkRetryRefund(t *testing.T) {
 	if err != nil || len(jobs) != 1 || jobs[0].Attempts != 1 {
 		t.Fatalf("claim: %v %+v", err, jobs)
 	}
-	if err := st.MarkRetry(ctx, ids[0], time.Now().Add(time.Hour), true, "429"); err != nil {
+	if err := st.MarkRetry(ctx, jobs[0], time.Now().Add(time.Hour), true, "429"); err != nil {
 		t.Fatal(err)
 	}
 	r := getMessage(t, pool, ids[0])
@@ -123,28 +124,74 @@ func TestMarkTerminalStates(t *testing.T) {
 	ids := insertMessages(t, pool, camp, "sms", 4)
 	st := NewStore(pool)
 	ctx := context.Background()
-	if _, err := st.Claim(ctx, "sms", 4, lease); err != nil {
-		t.Fatal(err)
-	}
+	jobs := claimAll(t, st, "sms")
 	must := func(err error) {
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	must(st.MarkSent(ctx, ids[0], "msg-1"))
-	must(st.MarkFailed(ctx, ids[1], "400"))
-	must(st.MarkUnknown(ctx, ids[2], "503"))
-	must(st.MarkSkipped(ctx, ids[3]))
+	must(st.MarkSent(ctx, jobs[ids[0]], "msg-1"))
+	must(st.MarkFailed(ctx, jobs[ids[1]], "400"))
+	must(st.MarkUnknown(ctx, jobs[ids[2]], "503"))
+	must(st.MarkSkipped(ctx, jobs[ids[3]]))
 	want := []string{"sent", "failed", "unknown", "skipped_no_consent"}
 	for i, id := range ids {
 		if s := getMessage(t, pool, id).Status; s != want[i] {
 			t.Errorf("%d: %s want %s", i, s, want[i])
 		}
 	}
+	if a := getMessage(t, pool, ids[3]).Attempts; a != 0 {
+		t.Errorf("skipped message attempts=%d, want 0 (claim attempt refunded)", a)
+	}
+	if a := getMessage(t, pool, ids[1]).Attempts; a != 1 {
+		t.Errorf("failed message attempts=%d, want 1", a)
+	}
 	var pid string
 	var sentAt *time.Time
 	pool.QueryRow(ctx, `select provider_message_id, sent_at from messages where id=$1`, ids[0]).Scan(&pid, &sentAt)
 	if pid != "msg-1" || sentAt == nil {
 		t.Fatalf("provider id %q sent_at %v", pid, sentAt)
+	}
+}
+
+// A job whose lease expired and was reclaimed must not be able to record an
+// outcome: its Mark* is a no-op, the newer claim's is applied.
+func TestStaleLeaseMarkIsNoop(t *testing.T) {
+	pool := newDB(t, 300)
+	camp := insertCampaign(t, pool, "sending")
+	ids := insertMessages(t, pool, camp, "sms", 1)
+	st := NewStore(pool)
+	ctx := context.Background()
+
+	stale := claimAll(t, st, "sms")[ids[0]]
+	mustExec(t, pool, `update messages set locked_until=now()-interval '1 second' where id=$1`, ids[0])
+	fresh := claimAll(t, st, "sms")[ids[0]]
+	if !fresh.Recovered || fresh.LockedUntil.Equal(stale.LockedUntil) {
+		t.Fatalf("reclaim: %+v", fresh)
+	}
+
+	for name, err := range map[string]error{
+		"sent":    st.MarkSent(ctx, stale, "x"),
+		"retry":   st.MarkRetry(ctx, stale, time.Now(), true, "x"),
+		"failed":  st.MarkFailed(ctx, stale, "x"),
+		"unknown": st.MarkUnknown(ctx, stale, "x"),
+		"skipped": st.MarkSkipped(ctx, stale),
+	} {
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Errorf("stale %s: err=%v, want ErrLeaseLost", name, err)
+		}
+	}
+	if r := getMessage(t, pool, ids[0]); r.Status != "sending" || r.Attempts != 2 {
+		t.Fatalf("stale write changed the row: %+v", r)
+	}
+	if err := st.MarkSent(ctx, fresh, "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	if r := getMessage(t, pool, ids[0]); r.Status != "sent" {
+		t.Fatalf("got %+v", r)
+	}
+	// Already terminal: even the right token is now a no-op.
+	if err := st.MarkUnknown(ctx, fresh, "late"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("err=%v", err)
 	}
 }

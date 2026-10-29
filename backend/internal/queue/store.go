@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,9 @@ type Job struct {
 	Recovered bool
 	// HasConsent is the user's consent for Channel as read at claim time.
 	HasConsent bool
+	// LockedUntil is the lease set by this claim. It doubles as a fencing
+	// token for the Mark* updates.
+	LockedUntil time.Time
 }
 
 // Store is the queue's data access on top of the messages table.
@@ -55,9 +59,9 @@ with picked as (
   from picked
   where m.id = picked.id
   returning m.id, m.campaign_id, m.user_id, m.channel, m.recipient, coalesce(m.subject, '') as subject,
-            m.body, m.attempts, picked.prev_status = 'sending' as recovered
+            m.body, m.attempts, picked.prev_status = 'sending' as recovered, m.locked_until
 )
-select c.id, c.campaign_id, c.user_id, c.channel, c.recipient, c.subject, c.body, c.attempts, c.recovered,
+select c.id, c.campaign_id, c.user_id, c.channel, c.recipient, c.subject, c.body, c.attempts, c.recovered, c.locked_until,
        coalesce(case c.channel when 'sms' then u.sms_consent else u.email_consent end, false) as has_consent
 from claimed c join users u on u.id = c.user_id`
 
@@ -72,47 +76,65 @@ func (s *Store) Claim(ctx context.Context, channel string, limit int, lease time
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Job, error) {
 		var j Job
 		err := r.Scan(&j.ID, &j.CampaignID, &j.UserID, &j.Channel, &j.Recipient, &j.Subject, &j.Body,
-			&j.Attempts, &j.Recovered, &j.HasConsent)
+			&j.Attempts, &j.Recovered, &j.LockedUntil, &j.HasConsent)
 		return j, err
 	})
 }
 
-// All Mark* updates only touch rows still in 'sending', so a late update from
-// a worker that lost its lease cannot overwrite a terminal state.
+// ErrLeaseLost is returned by the Mark* methods when the row is no longer
+// held under the job's lease (it expired and was reclaimed, or was already
+// finalized). The update is then a no-op.
+var ErrLeaseLost = errors.New("queue: lease lost; row not updated")
+
+// All Mark* updates are fenced by the claim's lease token: they only touch the
+// row if it is still 'sending' with the exact locked_until set by the Claim
+// that produced j. A stale in-process copy of a job (lease expired and the
+// row reclaimed) therefore cannot overwrite the newer claim's outcome.
+const fence = ` where id=$1 and status='sending' and locked_until=$2`
+
+func (s *Store) exec(ctx context.Context, sql string, args ...any) error {
+	tag, err := s.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLeaseLost
+	}
+	return nil
+}
 
 // MarkSent records a successful (or provider-deduplicated) send.
-func (s *Store) MarkSent(ctx context.Context, id uuid.UUID, providerID string) error {
-	_, err := s.pool.Exec(ctx, `update messages set status='sent', provider_message_id=nullif($2,''), sent_at=now(),
-		locked_until=null, last_error=null, updated_at=now() where id=$1 and status='sending'`, id, providerID)
-	return err
+func (s *Store) MarkSent(ctx context.Context, j Job, providerID string) error {
+	return s.exec(ctx, `update messages set status='sent', provider_message_id=nullif($3,''), sent_at=now(),
+		locked_until=null, last_error=null, updated_at=now()`+fence, j.ID, j.LockedUntil, providerID)
 }
 
 // MarkRetry re-queues the message for at. refundAttempt gives back the
 // attempt taken by Claim (429s and never-started sends do not count).
-func (s *Store) MarkRetry(ctx context.Context, id uuid.UUID, at time.Time, refundAttempt bool, lastErr string) error {
-	_, err := s.pool.Exec(ctx, `update messages set status='queued', next_attempt_at=$2,
-		attempts = case when $3 then greatest(attempts-1, 0) else attempts end,
-		locked_until=null, last_error=$4, updated_at=now() where id=$1 and status='sending'`, id, at, refundAttempt, lastErr)
-	return err
+func (s *Store) MarkRetry(ctx context.Context, j Job, at time.Time, refundAttempt bool, lastErr string) error {
+	return s.exec(ctx, `update messages set status='queued', next_attempt_at=$3,
+		attempts = case when $4 then greatest(attempts-1, 0) else attempts end,
+		locked_until=null, last_error=$5, updated_at=now()`+fence, j.ID, j.LockedUntil, at, refundAttempt, lastErr)
 }
 
 // MarkFailed: certainly not delivered and will not be retried.
-func (s *Store) MarkFailed(ctx context.Context, id uuid.UUID, lastErr string) error {
-	return s.markTerminal(ctx, id, "failed", lastErr)
+func (s *Store) MarkFailed(ctx context.Context, j Job, lastErr string) error {
+	return s.markTerminal(ctx, j, "failed", lastErr, false)
 }
 
 // MarkUnknown: may or may not have been delivered; will not be retried.
-func (s *Store) MarkUnknown(ctx context.Context, id uuid.UUID, lastErr string) error {
-	return s.markTerminal(ctx, id, "unknown", lastErr)
+func (s *Store) MarkUnknown(ctx context.Context, j Job, lastErr string) error {
+	return s.markTerminal(ctx, j, "unknown", lastErr, false)
 }
 
-// MarkSkipped: consent was revoked before sending.
-func (s *Store) MarkSkipped(ctx context.Context, id uuid.UUID) error {
-	return s.markTerminal(ctx, id, "skipped_no_consent", "consent revoked before send")
+// MarkSkipped: consent was revoked before sending. Nothing was sent, so the
+// attempt taken by Claim is refunded.
+func (s *Store) MarkSkipped(ctx context.Context, j Job) error {
+	return s.markTerminal(ctx, j, "skipped_no_consent", "consent revoked before send", true)
 }
 
-func (s *Store) markTerminal(ctx context.Context, id uuid.UUID, status, lastErr string) error {
-	_, err := s.pool.Exec(ctx, `update messages set status=$2, last_error=$3, locked_until=null, updated_at=now()
-		where id=$1 and status='sending'`, id, status, lastErr)
-	return err
+func (s *Store) markTerminal(ctx context.Context, j Job, status, lastErr string, refund bool) error {
+	return s.exec(ctx, `update messages set status=$3, last_error=$4, locked_until=null, updated_at=now(),
+		attempts = case when $5 then greatest(attempts-1, 0) else attempts end`+fence,
+		j.ID, j.LockedUntil, status, lastErr, refund)
 }

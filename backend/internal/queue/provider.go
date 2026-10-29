@@ -80,6 +80,15 @@ func (p *httpProvider) Send(ctx context.Context, m OutboundMessage) SendResult {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", m.ID.String())
+	if !p.idem {
+		// net/http treats a request with an Idempotency-Key header and a
+		// GetBody as replayable and may silently resend it on a reused
+		// keep-alive connection that dies after the request was written.
+		// Without provider-side dedup that would be a hidden double send,
+		// so make the body non-rewindable: the transport then returns the
+		// error to us (classified Uncertain → unknown) instead of retrying.
+		req.GetBody = nil
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {

@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math/rand/v2"
 	"sync"
@@ -18,7 +19,10 @@ const (
 	leaderHealth    = time.Second            // leader pings its lock connection this often
 	idlePoll        = 200 * time.Millisecond // claim poll interval when the queue is empty
 	dbOpTimeout     = 10 * time.Second
+	jobTimeout      = 30 * time.Second // DB updates of one job; outlives token wait + provider timeout
 	defaultRetryAft = time.Second
+	maxRetryAfter   = 10 * time.Second // clamp for provider Retry-After (pause and reschedule)
+	minLeaseLeft    = 5 * time.Second  // do not start a send with less lease than this left
 )
 
 // Dispatcher sends one channel's queued messages. Any number of Dispatchers
@@ -127,42 +131,18 @@ func discard(conn *pgxpool.Conn) {
 }
 
 // lead runs the claim → send loop while this process holds the lock. It
-// returns when ctx is done or the lock connection breaks (leadership lost);
-// in both cases it stops claiming, lets in-flight sends finish, and hands
-// claimed-but-unsent jobs back to the queue.
+// returns when ctx is done or the lock connection fails a ping (leadership
+// lost); in both cases it stops claiming, lets in-flight sends finish, and
+// hands claimed-but-unsent jobs back to the queue.
 func (d *Dispatcher) lead(ctx context.Context, conn *pgxpool.Conn) {
 	leadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// The lock lives exactly as long as conn's session; if pinging it fails
-	// we must assume another worker can take over, so stop sending.
-	healthDone := make(chan struct{})
-	go func() {
-		defer close(healthDone)
-		t := time.NewTicker(leaderHealth)
-		defer t.Stop()
-		for {
-			select {
-			case <-leadCtx.Done():
-				return
-			case <-t.C:
-				pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_, err := conn.Exec(pctx, "select 1")
-				pcancel()
-				if err != nil {
-					log.Printf("dispatch %s: lost leadership: %v", d.Channel, err)
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-	defer func() { <-healthDone }() // conn is used by unlock after we return
-
-	// inflight = claimed and not yet finished. It never exceeds BatchSize,
-	// so the jobs buffer never blocks the claim loop.
-	jobs := make(chan Job, d.BatchSize)
-	var inflight atomic.Int64
+	// Never hold more claimed jobs than the worker pool can take at once:
+	// every claimed job is picked up by a worker immediately, so nothing
+	// sits in an in-process buffer while its lease runs down.
+	jobs := make(chan Job, d.Concurrency)
+	var inflight atomic.Int64 // claimed and not yet finished; <= Concurrency
 	finished := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	for range d.Concurrency {
@@ -183,13 +163,21 @@ func (d *Dispatcher) lead(ctx context.Context, conn *pgxpool.Conn) {
 	for leadCtx.Err() == nil {
 		rate := d.Limiter.Rate()
 		d.Metrics.SetSendRate(d.Channel, rate)
-		// Claim no more than ~1s worth of tokens so a claimed job never waits
-		// for a token anywhere near its 30s lease.
-		capacity := max(min(d.BatchSize, rate), 1)
+		// At most ~1s worth of tokens and at most the worker pool size.
+		capacity := max(min(d.BatchSize, rate, d.Concurrency), 1)
 		n := int(inflight.Load())
-		if n >= capacity || n >= d.Concurrency {
+		// Refill once half the pool is free, so claims come in batches
+		// rather than one query per finished send.
+		if n > capacity/2 {
 			waitAny(leadCtx, finished, idlePoll)
 			continue
+		}
+		// The lock lives exactly as long as conn's session. Confirm it is
+		// still alive before taking more work; if not, another worker may
+		// already be leader, so stop sending.
+		if !ping(conn) {
+			log.Printf("dispatch %s: lost leadership (lock connection failed)", d.Channel)
+			break
 		}
 		// Claim on a non-cancellable context: a claim interrupted after
 		// commit would leave leased rows nobody knows about.
@@ -203,62 +191,78 @@ func (d *Dispatcher) lead(ctx context.Context, conn *pgxpool.Conn) {
 		}
 		inflight.Add(int64(len(claimed)))
 		for _, j := range claimed {
-			jobs <- j
+			jobs <- j // never blocks: len(jobs) <= inflight <= Concurrency
 		}
 		if len(claimed) == 0 {
 			sleepCtx(leadCtx, idlePoll)
 		}
 	}
+	cancel() // also on leadership loss: workers release jobs not yet sent
 	close(jobs)
 	wg.Wait()
+}
+
+func ping(conn *pgxpool.Conn) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := conn.Exec(ctx, "select 1")
+	return err == nil
 }
 
 // process applies the decision table (spec §10.4) to one claimed job.
 // Provider calls and the resulting status updates use a context detached
 // from shutdown: a send that has started is always allowed to finish and be
-// recorded (the HTTP client timeout bounds it).
+// recorded (the HTTP client timeout bounds it). Every status update is
+// fenced by the job's lease token (see Store), so a stale copy is a no-op.
 func (d *Dispatcher) process(leadCtx context.Context, j Job) {
 	bg := context.WithoutCancel(leadCtx)
+	ctx, cancel := context.WithTimeout(bg, jobTimeout)
+	defer cancel()
 	mark := func(outcome string, err error) {
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrLeaseLost):
+			log.Printf("dispatch %s: %s: lease lost before recording %s (row was reclaimed)", d.Channel, j.ID, outcome)
+		case err != nil:
 			// The row stays 'sending' and is recovered after its lease expires.
 			log.Printf("dispatch %s: mark %s %s: %v", d.Channel, j.ID, outcome, err)
 		}
 		d.Metrics.Outcome(d.Channel, outcome)
 	}
-	mctx := func() (context.Context, context.CancelFunc) { return context.WithTimeout(bg, dbOpTimeout) }
+	release := func(why string) {
+		if err := d.Store.MarkRetry(ctx, j, time.Now(), true, why); err != nil && !errors.Is(err, ErrLeaseLost) {
+			log.Printf("dispatch %s: release %s: %v", d.Channel, j.ID, err)
+		}
+	}
 	idem := d.Provider.SupportsIdempotency()
 
-	// HasConsent was read from users in the same statement that claimed the
-	// job, i.e. immediately before sending (at most ~1s of token wait later).
-	if !j.HasConsent {
-		ctx, c := mctx()
-		defer c()
-		mark("skipped_no_consent", d.Store.MarkSkipped(ctx, j.ID))
-		return
-	}
+	// Recovery is checked first: a recovered row may already have been
+	// delivered, so it must not be reported as skipped_no_consent.
 	if j.Recovered && !idem {
 		// A previous worker died mid-request: it may have been delivered and
 		// the provider cannot deduplicate a resend. At-most-once.
-		ctx, c := mctx()
-		defer c()
-		mark("unknown", d.Store.MarkUnknown(ctx, j.ID, "worker crashed mid-send"))
+		mark("unknown", d.Store.MarkUnknown(ctx, j, "worker crashed mid-send"))
 		return
 	}
 	if j.Recovered && j.Attempts > d.MaxAttempts {
-		ctx, c := mctx()
-		defer c()
-		mark("unknown", d.Store.MarkUnknown(ctx, j.ID, "worker crashed mid-send; attempts exhausted"))
+		mark("unknown", d.Store.MarkUnknown(ctx, j, "worker crashed mid-send; attempts exhausted"))
+		return
+	}
+	// HasConsent was read from users in the same statement that claimed the
+	// job, i.e. immediately before sending (plus at most the token wait).
+	if !j.HasConsent {
+		mark("skipped_no_consent", d.Store.MarkSkipped(ctx, j))
 		return
 	}
 
 	if err := d.Limiter.Wait(leadCtx); err != nil {
 		// Stopping before the request was made: certainly not sent, give it back.
-		ctx, c := mctx()
-		defer c()
-		if err := d.Store.MarkRetry(ctx, j.ID, time.Now(), true, "dispatcher stopped before send"); err != nil {
-			log.Printf("dispatch %s: release %s: %v", d.Channel, j.ID, err)
-		}
+		release("dispatcher stopped before send")
+		return
+	}
+	// Do not start a send whose lease could expire before it is recorded:
+	// another worker could reclaim the row while our request is in flight.
+	if time.Until(j.LockedUntil) < minLeaseLeft {
+		release("lease nearly expired before send")
 		return
 	}
 
@@ -266,37 +270,38 @@ func (d *Dispatcher) process(leadCtx context.Context, j Job) {
 	res := d.Provider.Send(bg, OutboundMessage{ID: j.ID, Channel: j.Channel, To: j.Recipient, Subject: j.Subject, Body: j.Body})
 	d.Metrics.ObserveLatency(d.Channel, time.Since(start))
 
-	ctx, c := mctx()
-	defer c()
 	now := time.Now()
 	switch res.Outcome {
 	case OutcomeSent, OutcomeDuplicate:
-		mark(res.Outcome.String(), d.Store.MarkSent(ctx, j.ID, res.ProviderID))
+		mark(res.Outcome.String(), d.Store.MarkSent(ctx, j, res.ProviderID))
 	case OutcomeRateLimited:
 		ra := res.RetryAfter
 		if ra <= 0 {
 			ra = defaultRetryAft
 		}
+		// Clamp: a huge Retry-After must not stall the channel past the
+		// leases of jobs already handed to workers.
+		ra = min(ra, maxRetryAfter)
 		d.Limiter.Pause(ra)
 		d.Metrics.RateLimitedInc(d.Channel)
-		mark("rate_limited", d.Store.MarkRetry(ctx, j.ID, now.Add(ra), true, res.Detail))
+		mark("rate_limited", d.Store.MarkRetry(ctx, j, now.Add(ra), true, res.Detail))
 	case OutcomePermanent:
-		mark("failed", d.Store.MarkFailed(ctx, j.ID, res.Detail))
+		mark("failed", d.Store.MarkFailed(ctx, j, res.Detail))
 	case OutcomeNotSent:
 		if j.Attempts >= d.MaxAttempts {
-			mark("failed", d.Store.MarkFailed(ctx, j.ID, res.Detail))
+			mark("failed", d.Store.MarkFailed(ctx, j, res.Detail))
 		} else {
-			mark("retry", d.Store.MarkRetry(ctx, j.ID, now.Add(d.backoff(j.Attempts)), false, res.Detail))
+			mark("retry", d.Store.MarkRetry(ctx, j, now.Add(d.backoff(j.Attempts)), false, res.Detail))
 		}
 	default: // OutcomeUncertain
 		switch {
 		case !idem:
-			mark("unknown", d.Store.MarkUnknown(ctx, j.ID, res.Detail))
+			mark("unknown", d.Store.MarkUnknown(ctx, j, res.Detail))
 		case j.Attempts >= d.MaxAttempts:
-			mark("unknown", d.Store.MarkUnknown(ctx, j.ID, res.Detail))
+			mark("unknown", d.Store.MarkUnknown(ctx, j, res.Detail))
 		default:
 			// Safe: the resend carries the same Idempotency-Key.
-			mark("retry", d.Store.MarkRetry(ctx, j.ID, now.Add(d.backoff(j.Attempts)), false, res.Detail))
+			mark("retry", d.Store.MarkRetry(ctx, j, now.Add(d.backoff(j.Attempts)), false, res.Detail))
 		}
 	}
 }

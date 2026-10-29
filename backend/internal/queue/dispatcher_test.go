@@ -109,7 +109,7 @@ func TestEndToEndExactlyOncePerRecipient(t *testing.T) {
 	_, srv := newMock(t, mockprovider.Config{FailRate: 0.1, RateLimited429: 0.05, LostResponseRate: 0.05, Idempotency: true})
 	p := NewHTTPProvider(srv.URL, true, 5*time.Second)
 	// Ignore consent for this test: everyone in the campaign has it.
-	pool.Exec(context.Background(), `update users set sms_consent=true`)
+	mustExec(t, pool, `update users set sms_consent=true`)
 
 	stop := runAll(t, newDispatcher(pool, p, "sms"), newDispatcher(pool, p, "sms"))
 	waitFor(t, 60*time.Second, "all messages terminal", allTerminal(t, pool, camp))
@@ -133,7 +133,7 @@ func TestRateLimitAcrossWorkers(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	insertMessages(t, pool, camp, "sms", 300)
-	pool.Exec(context.Background(), `update users set sms_consent=true`)
+	mustExec(t, pool, `update users set sms_consent=true`)
 	m, srv := newMock(t, mockprovider.Config{Idempotency: true}) // real clock, no faults, no provider-side limit
 	p := NewHTTPProvider(srv.URL, true, 5*time.Second)
 
@@ -157,9 +157,8 @@ func TestExpiredLockNonIdempotentBecomesUnknown(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	ids := insertMessages(t, pool, camp, "sms", 1)
-	ctx := context.Background()
-	pool.Exec(ctx, `update users set sms_consent=true`)
-	pool.Exec(ctx, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
+	mustExec(t, pool, `update users set sms_consent=true`)
+	mustExec(t, pool, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
 	_, srv := newMock(t, mockprovider.Config{Idempotency: false})
 	cp := newCounting(NewHTTPProvider(srv.URL, false, 5*time.Second))
 
@@ -177,9 +176,8 @@ func TestExpiredLockIdempotentResends(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	ids := insertMessages(t, pool, camp, "sms", 1)
-	ctx := context.Background()
-	pool.Exec(ctx, `update users set sms_consent=true`)
-	pool.Exec(ctx, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
+	mustExec(t, pool, `update users set sms_consent=true`)
+	mustExec(t, pool, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
 	_, srv := newMock(t, mockprovider.Config{Idempotency: true})
 	cp := newCounting(NewHTTPProvider(srv.URL, true, 5*time.Second))
 
@@ -194,10 +192,9 @@ func TestRevokedConsentSkipped(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	ids := insertMessages(t, pool, camp, "email", 3)
-	ctx := context.Background()
-	pool.Exec(ctx, `update users set email_consent=true`)
+	mustExec(t, pool, `update users set email_consent=true`)
 	// Revoked after approval (message rows already exist).
-	pool.Exec(ctx, `update users set email_consent=false where id=(select user_id from messages where id=$1)`, ids[0])
+	mustExec(t, pool, `update users set email_consent=false where id=(select user_id from messages where id=$1)`, ids[0])
 	_, srv := newMock(t, mockprovider.Config{Idempotency: true})
 	cp := newCounting(NewHTTPProvider(srv.URL, true, 5*time.Second))
 
@@ -224,7 +221,7 @@ func TestRateLimitedDoesNotConsumeAttempts(t *testing.T) {
 	camp := insertCampaign(t, pool, "sending")
 	// Each 429 pauses the whole channel for Retry-After (1s), so keep this small.
 	ids := insertMessages(t, pool, camp, "sms", 2)
-	pool.Exec(context.Background(), `update users set sms_consent=true`)
+	mustExec(t, pool, `update users set sms_consent=true`)
 	_, srv := newMock(t, mockprovider.Config{RateLimited429: 1, Idempotency: true})
 	cp := newCounting(NewHTTPProvider(srv.URL, true, 5*time.Second))
 
@@ -242,7 +239,7 @@ func TestUncertainExhaustedIsUnknown(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	ids := insertMessages(t, pool, camp, "sms", 3)
-	pool.Exec(context.Background(), `update users set sms_consent=true`)
+	mustExec(t, pool, `update users set sms_consent=true`)
 	_, srv := newMock(t, mockprovider.Config{FailRate: 1, Idempotency: true})
 	cp := newCounting(NewHTTPProvider(srv.URL, true, 5*time.Second))
 	d := newDispatcher(pool, cp, "sms")
@@ -261,7 +258,7 @@ func TestNotSentExhaustedIsFailed(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	ids := insertMessages(t, pool, camp, "sms", 2)
-	pool.Exec(context.Background(), `update users set sms_consent=true`)
+	mustExec(t, pool, `update users set sms_consent=true`)
 	// A closed server: connection refused, the request never left.
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
@@ -282,9 +279,8 @@ func TestPermanentFailure(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	ids := insertMessages(t, pool, camp, "sms", 1)
-	ctx := context.Background()
-	pool.Exec(ctx, `update users set sms_consent=true`)
-	pool.Exec(ctx, `update messages set recipient='' where id=$1`, ids[0]) // mock: 400 invalid body
+	mustExec(t, pool, `update users set sms_consent=true`)
+	mustExec(t, pool, `update messages set recipient='' where id=$1`, ids[0]) // mock: 400 invalid body
 	_, srv := newMock(t, mockprovider.Config{Idempotency: true})
 
 	runAll(t, newDispatcher(pool, NewHTTPProvider(srv.URL, true, 5*time.Second), "sms"))
@@ -298,7 +294,7 @@ func TestLeaderOnlyOneSends(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")
 	insertMessages(t, pool, camp, "sms", 50)
-	pool.Exec(context.Background(), `update users set sms_consent=true`)
+	mustExec(t, pool, `update users set sms_consent=true`)
 	_, srv := newMock(t, mockprovider.Config{Idempotency: true})
 	p := NewHTTPProvider(srv.URL, true, 5*time.Second)
 	a, b := newCounting(p), newCounting(p)
@@ -320,9 +316,9 @@ func TestCompleteCampaigns(t *testing.T) {
 	insertMessages(t, pool, busy, "sms", 2)
 	statuses := []string{"sent", "failed", "unknown", "skipped_no_consent"}
 	for i, id := range ids {
-		pool.Exec(ctx, `update messages set status=$2 where id=$1`, id, statuses[i])
+		mustExec(t, pool, `update messages set status=$2 where id=$1`, id, statuses[i])
 	}
-	pool.Exec(ctx, `update messages set status='sent' where campaign_id=$1 and id=(select min(id::text)::uuid from messages where campaign_id=$1)`, busy)
+	mustExec(t, pool, `update messages set status='sent' where campaign_id=$1 and id=(select min(id::text)::uuid from messages where campaign_id=$1)`, busy)
 
 	n, err := CompleteCampaigns(ctx, pool)
 	if err != nil || n != 1 {
@@ -338,5 +334,46 @@ func TestCompleteCampaigns(t *testing.T) {
 	}
 	if n, _ := CompleteCampaigns(ctx, pool); n != 0 {
 		t.Fatalf("second run completed %d", n)
+	}
+}
+
+func TestUncertainNonIdempotentIsUnknown(t *testing.T) {
+	pool := newDB(t, 300)
+	camp := insertCampaign(t, pool, "sending")
+	ids := insertMessages(t, pool, camp, "sms", 2)
+	mustExec(t, pool, `update users set sms_consent=true`)
+	_, srv := newMock(t, mockprovider.Config{FailRate: 1, Idempotency: false})
+	cp := newCounting(NewHTTPProvider(srv.URL, false, 5*time.Second))
+
+	runAll(t, newDispatcher(pool, cp, "sms"))
+	waitFor(t, 20*time.Second, "terminal", allTerminal(t, pool, camp))
+	for _, id := range ids {
+		if r := getMessage(t, pool, id); r.Status != "unknown" || r.Attempts != 1 {
+			t.Fatalf("got %+v", r)
+		}
+	}
+	if cp.Total() != 2 {
+		t.Fatalf("provider called %d times, want 2 (no retries)", cp.Total())
+	}
+}
+
+// A recovered row may already have been delivered: even if consent was
+// revoked meanwhile it must be reported unknown, not skipped_no_consent.
+func TestRecoveredCheckedBeforeConsent(t *testing.T) {
+	pool := newDB(t, 300)
+	camp := insertCampaign(t, pool, "sending")
+	ids := insertMessages(t, pool, camp, "sms", 1)
+	mustExec(t, pool, `update users set sms_consent=false`)
+	mustExec(t, pool, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
+	_, srv := newMock(t, mockprovider.Config{Idempotency: false})
+	cp := newCounting(NewHTTPProvider(srv.URL, false, 5*time.Second))
+
+	runAll(t, newDispatcher(pool, cp, "sms"))
+	waitFor(t, 20*time.Second, "terminal", allTerminal(t, pool, camp))
+	if r := getMessage(t, pool, ids[0]); r.Status != "unknown" {
+		t.Fatalf("got %+v", r)
+	}
+	if cp.Total() != 0 {
+		t.Fatalf("provider called %d times", cp.Total())
 	}
 }
