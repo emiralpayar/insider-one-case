@@ -81,8 +81,10 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			log.Printf("dispatch %s: leader lock: %v", d.Channel, err)
 		}
 		if conn != nil {
+			log.Printf("dispatch %s: acquired channel leadership", d.Channel)
 			d.lead(ctx, conn)
 			d.unlock(conn)
+			log.Printf("dispatch %s: released channel leadership", d.Channel)
 			continue
 		}
 		sleepCtx(ctx, leaderRetry)

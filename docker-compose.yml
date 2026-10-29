@@ -1,0 +1,120 @@
+# Smart Campaign Composer: `docker compose up` brings up the whole system.
+#   web           http://localhost:3000   Vue SPA (nginx, proxies /api to api)
+#   api           http://localhost:8080   HTTP API; migrates + seeds an empty DB on start
+#   worker x2     metrics on host ports 9091-9092 (/metrics, /healthz)
+#   mock-provider http://localhost:8081   fake SMS/email provider with fault injection
+#   postgres      state + queue (not published; `docker compose exec postgres psql -U composer`)
+# Optional settings come from .env (see .env.example); everything has a default.
+# Without ANTHROPIC_API_KEY the system still starts: LLM endpoints answer 503 and the UI
+# shows a red banner. LLM_PROVIDER=mock is an explicit keyless demo mode (orange banner).
+
+# api, worker and mock-provider share one Dockerfile (both binaries); BuildKit
+# builds it once and reuses the cache for the other services.
+x-backend: &backend
+  build: ./backend
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: composer
+      POSTGRES_PASSWORD: composer
+      POSTGRES_DB: composer
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U composer -d composer"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    command: ["api"]
+    env_file: # optional; only the api needs the LLM settings
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://composer:composer@postgres:5432/composer?sslmode=disable
+      PORT: "8080"
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL_SEGMENT: ${ANTHROPIC_MODEL_SEGMENT:-claude-sonnet-5-5}
+      ANTHROPIC_MODEL_CONTENT: ${ANTHROPIC_MODEL_CONTENT:-claude-sonnet-5-5}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # /readyz is 200 once migrations + seed are done and the DB answers.
+      test: ["CMD", "/usr/local/bin/composer", "healthcheck", "http://localhost:8080/readyz"]
+      interval: 2s
+      timeout: 4s
+      retries: 30
+      start_period: 60s
+
+  worker:
+    <<: *backend
+    command: ["worker"]
+    deploy:
+      replicas: 2 # two workers: per-channel leadership + rate limit across processes
+    environment:
+      DATABASE_URL: postgres://composer:composer@postgres:5432/composer?sslmode=disable
+      PROVIDER_URL: http://mock-provider:8081
+      PROVIDER_IDEMPOTENCY: ${PROVIDER_IDEMPOTENCY:-true}
+      METRICS_ADDR: ":9090"
+    ports:
+      - "9091-9092:9090"
+    depends_on:
+      api: # api owns the migrations
+        condition: service_healthy
+      mock-provider:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/composer", "healthcheck", "http://localhost:9090/healthz"]
+      interval: 5s
+      timeout: 4s
+      retries: 10
+
+  mock-provider:
+    <<: *backend
+    entrypoint: ["/usr/local/bin/mockprovider"]
+    command: []
+    environment:
+      PORT: "8081"
+      MOCK_FAIL_RATE: ${MOCK_FAIL_RATE:-0.05}
+      MOCK_429_RATE: ${MOCK_429_RATE:-0.03}
+      MOCK_LOST_RESPONSE_RATE: ${MOCK_LOST_RESPONSE_RATE:-0.02}
+      MOCK_TIMEOUT_RATE: ${MOCK_TIMEOUT_RATE:-0.01}
+      MOCK_LATENCY_MIN_MS: ${MOCK_LATENCY_MIN_MS:-10}
+      MOCK_LATENCY_MAX_MS: ${MOCK_LATENCY_MAX_MS:-150}
+      MOCK_TIMEOUT_DELAY_MS: ${MOCK_TIMEOUT_DELAY_MS:-10000}
+      MOCK_RATE_PER_SECOND: ${MOCK_RATE_PER_SECOND:-100}
+      MOCK_IDEMPOTENCY: ${MOCK_IDEMPOTENCY:-true}
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/mockprovider", "healthcheck"]
+      interval: 2s
+      timeout: 4s
+      retries: 30
+
+  web:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

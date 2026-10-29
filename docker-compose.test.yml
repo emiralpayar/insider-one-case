@@ -1,3 +1,5 @@
+# Test database for `make test`; separate project so it never shares a network with the app stack.
+name: campaign-composer-test
 services:
   postgres-test:
     image: postgres:16

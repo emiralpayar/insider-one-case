@@ -23,8 +23,15 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: composer <migrate|seed|api|worker>")
+		fmt.Fprintln(os.Stderr, "usage: composer <migrate|seed|api|worker|healthcheck URL>")
 		os.Exit(2)
+	}
+	if os.Args[1] == "healthcheck" {
+		// Used by the container healthcheck (the distroless image has no curl).
+		if len(os.Args) < 3 {
+			log.Fatal("usage: composer healthcheck URL")
+		}
+		os.Exit(httpCheck(os.Args[2]))
 	}
 	ctx := context.Background()
 	url := os.Getenv("DATABASE_URL")
@@ -65,6 +72,22 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+// httpCheck returns 0 when GET u answers 2xx within 3 seconds.
+func httpCheck(u string) int {
+	c := http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get(u)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		fmt.Fprintln(os.Stderr, resp.Status)
+		return 1
+	}
+	return 0
 }
 
 func mustURL(u string) {

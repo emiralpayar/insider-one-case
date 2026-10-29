@@ -111,3 +111,39 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 **Karar:** Model amaca göre ayrı seçilir: `ANTHROPIC_MODEL_SEGMENT` (varsayılan `claude-sonnet-5-5`) ve `ANTHROPIC_MODEL_CONTENT` (varsayılan `claude-sonnet-5-5`). Yapılandırılmış çıktı için structured output (JSON schema) kullanılır.
 
 **Neden:** İki iş de kısa ve iyi tanımlı. Segment çıktısı her durumda backend doğrulamasından geçiyor, içerik limitlerini onarım döngüsü yakalıyor. Opus'un ek gücü bu işlerde maliyet ve gecikmeye değmez. Haiku 5.5 içerik için çok daha ucuz ve hızlı, ama Türkçe "samimi ama kısa" metin kalitesi ölçülmeden varsayılan yapılmadı. Golden brief seti iki modelle çalıştırılıp onarım oranı, gecikme ve metin kalitesi karşılaştırılacak, sonuç buraya yazılacak.
+
+## 16. Kuyruk güncellemeleri kira token'ı ile çitlenir
+
+**Karar:** Claim'in yazdığı `locked_until` değeri bir fencing token olarak kullanılır. Tüm `Mark*` güncellemeleri `where id=$1 and status='sending' and locked_until=$2` koşuluyla çalışır; eşleşme yoksa no-op olur (`ErrLeaseLost`).
+
+**Neden:** Bir worker yavaşlayıp kirası dolarsa satır başka worker'a geçer. Eski worker'ın elindeki kopya sonradan "failed" veya "sent" yazarsa yeni denemenin sonucunu ezer, durum yanlış olur. Token ile yalnızca satırı en son claim eden sonuç yazabilir. (Uygulama sırasında review'da yakalandı.)
+
+## 17. Idempotency desteklenmiyorsa HTTP katmanı da isteği tekrar etmez
+
+**Karar:** `PROVIDER_IDEMPOTENCY=false` iken provider isteğinin `GetBody`'si kaldırılır.
+
+**Neden:** Go'nun `net/http` transport'u `Idempotency-Key` başlığı taşıyan ve gövdesi yeniden okunabilen bir isteği, yazıldıktan sonra kopan keep-alive bağlantıda sessizce yeniden gönderebilir. Provider dedup yapmıyorsa bu görünmez bir çift gönderim olur. Gövde geri sarılamaz olunca hata bize döner, "belirsiz" sınıflanır ve mesaj `unknown` olur (#3). Idempotent modda bu tekrar zararsızdır, açık bırakılır.
+
+## 18. `Retry-After` 10 sn ile sınırlanır
+
+**Karar:** 429'daki `Retry-After` (yoksa varsayılan bekleme) en fazla 10 sn kabul edilir; kanal bu süre durdurulur ve mesaj o kadar ertelenir.
+
+**Neden:** Çok büyük bir `Retry-After` kanalı, worker'lara verilmiş işlerin kira süresinden (30 sn) uzun durdurursa bu işlerin kirası dolar ve çökme kurtarma yoluna (belirsiz) düşerler. Sınır, tek bir hatalı başlığın kanalı kilitlemesini de önler. Gerçek bir provider'da bu değer provider sözleşmesine göre ayarlanmalı.
+
+## 19. Onay kararı tek transaction ve tek bağlantıda verilir
+
+**Karar:** Onayda kampanya satırı `FOR UPDATE` ile kilitlenir; kural/içerik yeniden doğrulama, kitle sayımı, geniş kitle kontrolü, mesajların render edilip yazılması ve `sending`'e geçiş aynı transaction'da, aynı bağlantı üzerinde yapılır.
+
+**Neden:** Kontrol ayrı bağlantıda yapılırsa ("kitle %50'den küçük mü?") karar ile kuyruğa alma arasında veri değişebilir. Ayrıca ilk uygulamada kilit tutulurken havuzdan ikinci bir bağlantı isteniyordu; eşzamanlı onaylarda küçük havuz tükenip kilitlenme (deadlock) oluşuyordu. Bunu `TestApproveSmallPoolNoDeadlock` yakalar.
+
+## 20. Retry sonrası gönderilen mesajın hatası silinmez
+
+**Karar:** `MarkSent` `last_error`'ı temizlemez. Dashboard'daki "Son hatalar" listesi her mesajın son hatasını güncel durumuyla (ör. `sent`, 2. denemede) gösterir.
+
+**Neden:** Varsayılan hata oranlarıyla yüzlerce hata yaşanıp hepsi retry ile kurtarıldığında dashboard "Hata yok" diyordu; retry mekanizması görünmez oluyordu. Pazarlamacı ve operatör için "sorun yaşandı ama kurtarıldı" bilgisi değerli. Terminal hata sayıları zaten durum dağılımında ayrı görünür.
+
+## 21. Paketleme: tek imaj, iki binary, distroless
+
+**Karar:** Backend imajı `golang:1.24` ile derlenip `distroless/static` üzerine iki statik binary (`composer`, `mockprovider`) olarak konur. İmajda shell/curl olmadığından container healthcheck'leri binary'nin `healthcheck` alt komutuyla yapılır. `api` açılışta migration + boşsa seed çalıştırır; worker'lar `api` sağlıklı olunca başlar (migration sahibi tek servis). Compose'ta worker `deploy.replicas: 2`.
+
+**Neden:** Küçük, saldırı yüzeyi az imaj; tek komutla sıralı ayağa kalkış; iki worker ile kanal liderliği ve rate limit davranışı gerçek ortamda gözlenebilir.
