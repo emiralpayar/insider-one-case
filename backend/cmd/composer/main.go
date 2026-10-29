@@ -42,7 +42,12 @@ func main() {
 			log.Fatalf("seed: %v", err)
 		}
 		log.Printf("seed: users=%d events=%d skipped=%v", res.Users, res.Events, res.Skipped)
-	case "api", "worker":
+	case "worker":
+		mustURL(url)
+		if err := runWorker(url); err != nil {
+			log.Fatalf("worker: %v", err)
+		}
+	case "api":
 		log.Fatalf("%s: not implemented", os.Args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
