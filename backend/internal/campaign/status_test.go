@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/emiralpayar/campaign-composer/internal/campaign"
+	"github.com/emiralpayar/campaign-composer/internal/queue"
 	"github.com/google/uuid"
 )
 
@@ -67,5 +69,47 @@ func TestStatusDraftHasZeroChannels(t *testing.T) {
 	}
 	if rep.CampaignStatus != "draft" || len(rep.Channels) != 2 || rep.Channels["sms"].Total != 0 || rep.RecentErrors == nil {
 		t.Fatalf("rep = %+v", rep)
+	}
+}
+
+// A message that failed once and was then sent on retry keeps its last_error,
+// so the dashboard's "recent errors" shows the retry history with the
+// message's current status (sent) instead of hiding it.
+func TestStatusKeepsErrorOfRetriedThenSentMessage(t *testing.T) {
+	pool := seeded(t)
+	ctx := context.Background()
+	id := readyCampaign(t, pool, istanbulAbandoned())
+	if _, err := campaign.Approve(ctx, pool, id, campaign.ApproveRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	st := queue.NewStore(pool)
+	jobs, err := st.Claim(ctx, "sms", 1, 30*time.Second)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("claim: %v %d", err, len(jobs))
+	}
+	if err := st.MarkRetry(ctx, jobs[0], time.Now().Add(-time.Second), false, "provider 503: unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := st.Claim(ctx, "sms", 1, 30*time.Second)
+	if err != nil || len(again) != 1 || again[0].ID != jobs[0].ID || again[0].Attempts != 2 {
+		t.Fatalf("reclaim: %v %+v", err, again)
+	}
+	if err := st.MarkSent(ctx, again[0], "pm-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := campaign.Status(ctx, pool, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.RecentErrors) != 1 {
+		t.Fatalf("recent errors = %+v, want the retried message", rep.RecentErrors)
+	}
+	e := rep.RecentErrors[0]
+	if e.MessageID != jobs[0].ID || e.Status != "sent" || e.Attempts != 2 || e.Error != "provider 503: unavailable" {
+		t.Fatalf("recent error = %+v", e)
+	}
+	if rep.Channels["sms"].ByStatus["sent"] != 1 {
+		t.Fatalf("sms = %+v", rep.Channels["sms"])
 	}
 }

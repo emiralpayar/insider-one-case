@@ -103,10 +103,12 @@ func (s *Store) exec(ctx context.Context, sql string, args ...any) error {
 	return nil
 }
 
-// MarkSent records a successful (or provider-deduplicated) send.
+// MarkSent records a successful (or provider-deduplicated) send. last_error
+// is deliberately kept: a message that was retried and then sent still shows
+// its retry history (with status 'sent') in the dashboard's recent errors.
 func (s *Store) MarkSent(ctx context.Context, j Job, providerID string) error {
 	return s.exec(ctx, `update messages set status='sent', provider_message_id=nullif($3,''), sent_at=now(),
-		locked_until=null, last_error=null, updated_at=now()`+fence, j.ID, j.LockedUntil, providerID)
+		locked_until=null, updated_at=now()`+fence, j.ID, j.LockedUntil, providerID)
 }
 
 // MarkRetry re-queues the message for at. refundAttempt gives back the

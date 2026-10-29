@@ -142,7 +142,7 @@ const rate = (r: number) => r.toLocaleString('tr-TR', { maximumFractionDigits: 1
       </div>
 
       <div class="card">
-        <div class="card-title"><h2>Son hatalar</h2><span class="muted small">en yeni 10</span></div>
+        <div class="card-title"><h2>Son hatalar</h2><span class="muted small">en yeni 10 · sonradan gönderilenler dahil</span></div>
         <p v-if="report.recent_errors.length === 0" class="muted">Hata yok.</p>
         <div v-else class="table-wrap" style="box-shadow: none">
           <table class="table">
