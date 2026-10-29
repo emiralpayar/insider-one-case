@@ -72,7 +72,8 @@ var sqlTemplates = map[string]string{
 	"abandoned_cart.within_days": `EXISTS (SELECT 1 FROM events c WHERE c.user_id=u.id AND c.type='cart_add' ` +
 		`AND c.occurred_at >= %[1]s - make_interval(days => %[2]s) AND c.occurred_at <= %[1]s ` +
 		`AND NOT EXISTS (SELECT 1 FROM events p WHERE p.user_id=u.id AND p.type='purchase' ` +
-		`AND p.occurred_at > (SELECT max(occurred_at) FROM events c2 WHERE c2.user_id=u.id AND c2.type='cart_add')))`,
+		`AND p.occurred_at <= %[1]s ` +
+		`AND p.occurred_at > (SELECT max(occurred_at) FROM events c2 WHERE c2.user_id=u.id AND c2.type='cart_add' AND c2.occurred_at <= %[1]s)))`,
 	"purchased.within_days":     `EXISTS (` + purchasesSince + `)`,
 	"purchased.not_within_days": `NOT EXISTS (` + purchasesSince + `)`,
 	"order_count.gte":           `(SELECT count(*) FROM events o WHERE o.user_id=u.id AND o.type='purchase') >= %s`,

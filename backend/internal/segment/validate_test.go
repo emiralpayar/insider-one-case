@@ -86,6 +86,11 @@ func TestValidateCodes(t *testing.T) {
 		{"signup 3651", filtered(cond("signed_up", "within_days", 3651)), "out_of_range", "conditions[0].value"},
 		{"conflict purchased", filtered(cond("purchased", "within_days", 30), cond("purchased", "not_within_days", 30)), "conflicting_conditions", "conditions[1]"},
 		{"conflict city", filtered(cond("city", "in", []string{"Ankara"}), cond("city", "not_in", []string{"ankara"})), "conflicting_conditions", "conditions[1]"},
+		{"conflict lang", filtered(cond("language", "eq", "tr"), cond("language", "eq", "en")), "conflicting_conditions", "conditions[1]"},
+		{"conflict order", filtered(cond("order_count", "gte", 10), cond("order_count", "lte", 5)), "conflicting_conditions", "conditions[1]"},
+		{"conflict order rev", filtered(cond("order_count", "lte", 5), cond("order_count", "gte", 10)), "conflicting_conditions", "conditions[1]"},
+		{"conflict spent", filtered(cond("total_spent", "gte", 100), cond("total_spent", "lte", 50)), "conflicting_conditions", "conditions[1]"},
+		{"conflict city in/in", filtered(cond("city", "in", []string{"Ankara"}), cond("city", "in", []string{"izmir", "Bursa"})), "conflicting_conditions", "conditions[1]"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,4 +137,19 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestValidateNonConflicting(t *testing.T) {
+	rules := map[string]segment.Rule{
+		"order range":  filtered(cond("order_count", "gte", 5), cond("order_count", "lte", 10)),
+		"order equal":  filtered(cond("order_count", "gte", 5), cond("order_count", "lte", 5)),
+		"spent range":  filtered(cond("total_spent", "gte", 5), cond("total_spent", "lte", 10)),
+		"same lang":    filtered(cond("language", "eq", "tr"), cond("language", "eq", "tr")),
+		"city overlap": filtered(cond("city", "in", []string{"Ankara", "Bursa"}), cond("city", "in", []string{"bursa"})),
+	}
+	for n, r := range rules {
+		if _, errs := segment.Validate(r); len(errs) != 0 {
+			t.Errorf("%s: %v", n, errs)
+		}
+	}
 }

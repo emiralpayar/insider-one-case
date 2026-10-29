@@ -10,6 +10,13 @@ import (
 	"github.com/emiralpayar/campaign-composer/internal/verr"
 )
 
+type parsed struct {
+	ok     bool
+	cities []string
+	n      int64
+	str    string
+}
+
 // Validate checks r against the whitelist and returns a normalized copy
 // (canonical city names) plus errors sorted by condition index. The returned
 // rule is best-effort when errors exist.
@@ -37,11 +44,6 @@ func Validate(r Rule) (Rule, verr.List) {
 		out.Unmapped = []string{}
 	}
 
-	type parsed struct {
-		ok     bool
-		cities []string
-		n      int64
-	}
 	ps := make([]parsed, len(r.Conditions))
 
 	for i, c := range r.Conditions {
@@ -89,7 +91,7 @@ func Validate(r Rule) (Rule, verr.List) {
 				add(p("value"), "invalid_value", "language must be \"tr\" or \"en\"")
 				continue
 			}
-			ps[i] = parsed{ok: true}
+			ps[i] = parsed{ok: true, str: s}
 		case kindInt:
 			n, ok := parseInt(c.Value)
 			if !ok {
@@ -114,7 +116,7 @@ func Validate(r Rule) (Rule, verr.List) {
 			if !ps[i].ok || ci.Field != cj.Field {
 				continue
 			}
-			if conflicts(ci, ps[i].cities, ps[i].n, cj, ps[j].cities, ps[j].n) {
+			if conflicts(ci, ps[i], cj, ps[j]) {
 				add(fmt.Sprintf("conditions[%d]", j), "conflicting_conditions",
 					fmt.Sprintf("conditions[%d] conflicts with conditions[%d] on field %q", j, i, cj.Field))
 				break
@@ -126,9 +128,22 @@ func Validate(r Rule) (Rule, verr.List) {
 	return out, errs
 }
 
-func conflicts(a Condition, ac []string, an int64, b Condition, bc []string, bn int64) bool {
+func conflicts(a Condition, pa parsed, b Condition, pb parsed) bool {
+	ac, an, bc, bn := pa.cities, pa.n, pb.cities, pb.n
 	switch a.Field {
 	case "city":
+		if a.Op == "in" && b.Op == "in" {
+			m := map[string]bool{}
+			for _, c := range ac {
+				m[c] = true
+			}
+			for _, c := range bc {
+				if m[c] {
+					return false
+				}
+			}
+			return true // empty intersection
+		}
 		if a.Op == b.Op {
 			return false
 		}
@@ -146,6 +161,17 @@ func conflicts(a Condition, ac []string, an int64, b Condition, bc []string, bn 
 			}
 		}
 		return true // every included city is also excluded
+	case "language":
+		return pa.str != pb.str
+	case "order_count", "total_spent":
+		if a.Op == b.Op {
+			return false
+		}
+		gte, lte := an, bn
+		if a.Op == "lte" {
+			gte, lte = bn, an
+		}
+		return gte > lte
 	case "purchased":
 		if a.Op == b.Op {
 			return false

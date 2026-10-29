@@ -127,3 +127,27 @@ func TestOtherFieldsExecute(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAbandonedCartIgnoresEventsAfterAsOf(t *testing.T) {
+	pool := seeded(t)
+	ctx := context.Background()
+	var id int64
+	err := pool.QueryRow(ctx, `insert into users(first_name,email,phone,city,language) values('Fut','future@example.test','+900000000000','Kayseri','tr') returning id`).Scan(&id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `insert into events(user_id,type,occurred_at,amount) values($1,'cart_add',$2,null),($1,'purchase',$3,10)`,
+		id, seedNow.AddDate(0, 0, -3), seedNow.AddDate(0, 0, 1)); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := segment.MatchIDs(ctx, pool, filtered(cond("city", "in", []string{"Kayseri"}), cond("abandoned_cart", "within_days", 30)), seedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range ids {
+		if x == id {
+			return
+		}
+	}
+	t.Fatal("user with purchase after asOf should still be abandoned at asOf")
+}
