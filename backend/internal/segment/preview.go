@@ -88,13 +88,7 @@ func Preview(ctx context.Context, pool *pgxpool.Pool, r Rule, asOf time.Time) (P
 	if err := rows.Err(); err != nil {
 		return p, err
 	}
-	p.Warnings = []Warning{}
-	if p.Total == 0 {
-		p.Warnings = append(p.Warnings, Warning{"empty_audience", "No users match this segment."})
-	}
-	if p.Total*2 > p.AllUsers {
-		p.Warnings = append(p.Warnings, Warning{"large_audience", fmt.Sprintf("Audience is %d of %d users (more than 50%%).", p.Total, p.AllUsers)})
-	}
+	p.Warnings = SizeWarnings(p.Total, p.AllUsers)
 	if len(r.Unmapped) > 0 {
 		p.Warnings = append(p.Warnings, Warning{"unmapped", fmt.Sprintf("Parts of the brief could not be mapped: %v", r.Unmapped)})
 	}
@@ -102,4 +96,18 @@ func Preview(ctx context.Context, pool *pgxpool.Pool, r Rule, asOf time.Time) (P
 		p.Warnings = append(p.Warnings, Warning{"mixed_language", fmt.Sprintf("%d English-speaking users are in the audience.", p.EnglishSpeakers)})
 	}
 	return p, nil
+}
+
+// SizeWarnings returns the audience-size warnings (empty_audience,
+// large_audience: more than 50% of all users). It is shared by Preview and the
+// approval step so that the threshold lives in one place.
+func SizeWarnings(total, allUsers int) []Warning {
+	w := []Warning{}
+	if total == 0 {
+		w = append(w, Warning{"empty_audience", "No users match this segment."})
+	}
+	if total*2 > allUsers {
+		w = append(w, Warning{"large_audience", fmt.Sprintf("Audience is %d of %d users (more than 50%%).", total, allUsers)})
+	}
+	return w
 }

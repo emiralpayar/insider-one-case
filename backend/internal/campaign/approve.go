@@ -42,6 +42,8 @@ type ApproveResult struct {
 // concurrent approvals serialize: the second one sees 'sending' and gets
 // ErrAlreadyApproved. Inserts use ON CONFLICT DO NOTHING as a second guard
 // against duplicates.
+//
+// Approve uses exactly one pool connection (the transaction's).
 func Approve(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, req ApproveRequest) (ApproveResult, error) {
 	asOf := time.Now()
 	tx, err := pool.Begin(ctx)
@@ -72,24 +74,24 @@ func Approve(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, req ApproveR
 	if errs := content.Validate(*c.Content, c.Channels, wc); len(errs) > 0 {
 		return ApproveResult{}, errs
 	}
-	// Preview only reads users/events, so running it on another connection
-	// while holding the campaign lock cannot deadlock.
-	pv, err := segment.Preview(ctx, pool, rule, asOf)
+	// The size decision uses data read in this transaction (same snapshot as
+	// the rows we queue) and never takes a second pool connection while the
+	// campaign row is locked.
+	users, err := audience(ctx, tx, rule, asOf)
 	if err != nil {
 		return ApproveResult{}, err
 	}
-	for _, w := range pv.Warnings {
+	var allUsers int
+	if err := tx.QueryRow(ctx, `select count(*) from users`).Scan(&allUsers); err != nil {
+		return ApproveResult{}, err
+	}
+	for _, w := range segment.SizeWarnings(len(users), allUsers) {
 		switch {
 		case w.Code == "empty_audience":
 			return ApproveResult{}, ErrEmptyAudience
 		case w.Code == "large_audience" && !req.ConfirmLargeAudience:
 			return ApproveResult{}, ErrLargeAudienceNotConfirmed
 		}
-	}
-
-	users, err := audience(ctx, tx, rule, asOf)
-	if err != nil {
-		return ApproveResult{}, err
 	}
 	res := ApproveResult{Enqueued: map[string]int{}}
 	total := 0

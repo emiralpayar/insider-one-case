@@ -37,17 +37,20 @@ type Config struct {
 	Registry *prometheus.Registry
 	// Now is the clock used as asOf for audience queries (default time.Now).
 	Now func() time.Time
+	// Heartbeat is the SSE keep-alive comment interval (default 15s).
+	Heartbeat time.Duration
 }
 
 // Server is the HTTP handler.
 type Server struct {
-	pool     *pgxpool.Pool
-	composer *llm.Composer
-	store    *campaign.Store
-	provider string
-	models   Models
-	now      func() time.Time
-	router   chi.Router
+	pool      *pgxpool.Pool
+	composer  *llm.Composer
+	store     *campaign.Store
+	provider  string
+	models    Models
+	now       func() time.Time
+	heartbeat time.Duration
+	router    chi.Router
 }
 
 // New builds the router.
@@ -58,14 +61,18 @@ func New(cfg Config) *Server {
 	}
 	m := metrics.NewAPI(reg, queueDepth(cfg.Pool))
 	s := &Server{
-		pool:     cfg.Pool,
-		store:    campaign.NewStore(cfg.Pool, cfg.LLMProvider),
-		provider: cfg.LLMProvider,
-		models:   cfg.Models,
-		now:      cfg.Now,
+		pool:      cfg.Pool,
+		store:     campaign.NewStore(cfg.Pool, cfg.LLMProvider),
+		provider:  cfg.LLMProvider,
+		models:    cfg.Models,
+		now:       cfg.Now,
+		heartbeat: cfg.Heartbeat,
 	}
 	if s.now == nil {
 		s.now = time.Now
+	}
+	if s.heartbeat <= 0 {
+		s.heartbeat = 15 * time.Second
 	}
 	if cfg.Composer != nil {
 		// Copy so that the caller's Composer is not mutated; every model call

@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/emiralpayar/campaign-composer/internal/campaign"
 	"github.com/emiralpayar/campaign-composer/internal/content"
@@ -85,22 +88,45 @@ func (s *Server) contentStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	send := func(event string, v any) {
+	// Writes come from the LLM callback and the heartbeat goroutine.
+	var mu sync.Mutex
+	write := func(frame string) {
+		mu.Lock()
+		defer mu.Unlock()
 		if ctx.Err() != nil {
 			return
 		}
+		io.WriteString(w, frame)
+		flusher.Flush()
+	}
+	send := func(event string, v any) {
 		b, err := json.Marshal(v)
 		if err != nil {
 			return
 		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		flusher.Flush()
+		write(fmt.Sprintf("event: %s\ndata: %s\n\n", event, b))
 	}
-	sendErr := func(err error) {
-		ae := toAPIError(err)
-		send("error", ae)
-	}
+	sendErr := func(err error) { send("error", toAPIError(err)) }
 
+	// Heartbeat comments keep proxies from closing an idle stream while the
+	// model is thinking.
+	stopBeat := make(chan struct{})
+	beatDone := make(chan struct{})
+	go func() {
+		defer close(beatDone)
+		t := time.NewTicker(s.heartbeat)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopBeat:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				write(": ping\n\n")
+			}
+		}
+	}()
 	out, err := s.composer.Content(ctx, c.ID, c.Brief, *c.Rule, gen, wc, func(e llm.Event) {
 		switch e.Type {
 		case "partial":
@@ -109,6 +135,8 @@ func (s *Server) contentStream(w http.ResponseWriter, r *http.Request) {
 			send("repair", e.Reason)
 		}
 	})
+	close(stopBeat)
+	<-beatDone
 	if ctx.Err() != nil {
 		return // client went away: no save, no events
 	}
@@ -130,19 +158,23 @@ func (s *Server) contentStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	done := doneEvent{Content: merged, Issues: verr.List{}, SMSStats: smsStats(merged, wc)}
+	// Everything that can fail happens before the save, so a saved result is
+	// always followed by "done" (never by "error").
+	if done.RenderedSample, err = s.renderSample(r, *c.Rule, merged, wc); err != nil {
+		sendErr(err)
+		return
+	}
 	if issues := content.Validate(merged, c.Channels, wc); len(issues) > 0 {
 		done.Issues = issues
 	} else {
+		if ctx.Err() != nil {
+			return
+		}
 		if err := s.store.SaveContent(ctx, c.ID, merged); err != nil {
 			sendErr(err)
 			return
 		}
 		done.Saved = true
-	}
-	done.RenderedSample, err = s.renderSample(r, *c.Rule, merged, wc)
-	if err != nil {
-		sendErr(err)
-		return
 	}
 	send("done", done)
 }

@@ -470,24 +470,38 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-// blockingClient streams a prefix and then waits for cancellation.
-type blockingClient struct{ cancelled chan struct{} }
+// ctxIgnoringClient streams a prefix, waits for the request to be cancelled
+// and then returns perfectly valid content with a nil error anyway — so only
+// the handler's own ctx check can prevent the save.
+type ctxIgnoringClient struct {
+	returned chan struct{}
+	delay    time.Duration // when set: sleep instead of waiting for cancellation
+}
 
-func (blockingClient) Name() string { return "blocking" }
+func (ctxIgnoringClient) Name() string { return "ctx-ignoring" }
 
-func (b blockingClient) Complete(ctx context.Context, req llm.Request, onDelta func(string)) (llm.Response, error) {
+const validContentJSON = `{"sms":"Merhaba {{first_name}}, fırsat seni bekliyor!","email":{"subject":"Fırsat","preheader":"","body":"Merhaba {{first_name}}"}}`
+
+func (b ctxIgnoringClient) Complete(ctx context.Context, req llm.Request, onDelta func(string)) (llm.Response, error) {
 	if req.Purpose != "content" {
 		return llm.NewMock().Complete(ctx, req, onDelta)
 	}
-	onDelta(`{"sms":"Merhaba {{first_name}}, `)
-	<-ctx.Done()
-	close(b.cancelled)
-	return llm.Response{}, ctx.Err()
+	onDelta(validContentJSON[:20])
+	if b.delay > 0 {
+		time.Sleep(b.delay)
+	} else {
+		<-ctx.Done()
+	}
+	onDelta(validContentJSON[20:])
+	if b.returned != nil {
+		close(b.returned)
+	}
+	return llm.Response{Text: validContentJSON, Model: "ctx-ignoring"}, nil
 }
 
 func TestContentStreamClientDisconnect(t *testing.T) {
 	pool := seeded(t)
-	bc := blockingClient{cancelled: make(chan struct{})}
+	bc := ctxIgnoringClient{returned: make(chan struct{})}
 	srv := newServer(t, pool, &llm.Composer{SegmentClient: bc, ContentClient: bc}, "mock")
 	id := createCampaign(t, srv)
 	if r := do(t, srv, "POST", "/api/campaigns/"+id+"/segment/generate", nil); r.Code != 200 {
@@ -506,13 +520,41 @@ func TestContentStreamClientDisconnect(t *testing.T) {
 	cancel()
 	res.Body.Close()
 	select {
-	case <-bc.cancelled:
+	case <-bc.returned:
 	case <-time.After(5 * time.Second):
-		t.Fatal("LLM call was not cancelled after client disconnect")
+		t.Fatal("server never noticed the disconnect")
 	}
-	time.Sleep(100 * time.Millisecond)
-	r := do(t, srv, "GET", "/api/campaigns/"+id, nil)
-	if !strings.Contains(string(r.Body), `"content":null`) {
-		t.Fatalf("content saved after disconnect: %s", r.Body)
+	// The client returned valid content; give the handler time to (wrongly) save.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		r := do(t, srv, "GET", "/api/campaigns/"+id, nil)
+		if !strings.Contains(string(r.Body), `"content":null`) {
+			t.Fatalf("content saved after disconnect: %s", r.Body)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestContentStreamHeartbeat(t *testing.T) {
+	pool := seeded(t)
+	bc := ctxIgnoringClient{delay: 300 * time.Millisecond}
+	srv := httptest.NewServer(api.New(api.Config{
+		Pool: pool, Composer: &llm.Composer{SegmentClient: bc, ContentClient: bc}, LLMProvider: "mock",
+		Heartbeat: 50 * time.Millisecond,
+	}))
+	t.Cleanup(srv.Close)
+	id := createCampaign(t, srv)
+	if r := do(t, srv, "POST", "/api/campaigns/"+id+"/segment/generate", nil); r.Code != 200 {
+		t.Fatalf("generate: %d %s", r.Code, r.Body)
+	}
+	res, err := http.Get(srv.URL + "/api/campaigns/" + id + "/content/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), ": ping\n\n") || !strings.Contains(string(body), "event: done\n") ||
+		!strings.Contains(string(body), `"saved":true`) {
+		t.Fatalf("stream body: %s", body)
 	}
 }

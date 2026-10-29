@@ -9,19 +9,39 @@ import (
 	"time"
 
 	"github.com/emiralpayar/campaign-composer/internal/campaign"
+	"github.com/emiralpayar/campaign-composer/internal/db"
+	"github.com/emiralpayar/campaign-composer/internal/dbtest"
 	"github.com/emiralpayar/campaign-composer/internal/seed"
 	"github.com/emiralpayar/campaign-composer/internal/segment"
 	"github.com/emiralpayar/campaign-composer/internal/verr"
+	"github.com/google/uuid"
 )
 
 func TestApproveEnqueuesOnlyConsented(t *testing.T) {
 	pool := seeded(t)
 	ctx := context.Background()
 	id := readyCampaign(t, pool, istanbulAbandoned())
+	// Make the empty-name scenario user opt out of email (keeps SMS consent).
+	emptyName := userID(t, pool, seed.ScenarioEmptyName)
+	if _, err := pool.Exec(ctx, `update users set email_consent=false where id=$1`, emptyName); err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := campaign.Approve(ctx, pool, id, campaign.ApproveRequest{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var noEmail int
+	pool.QueryRow(ctx, `select count(*) from messages where campaign_id=$1 and user_id=$2 and channel='email'`, id, emptyName).Scan(&noEmail)
+	if noEmail != 0 {
+		t.Fatalf("user without email consent got %d email rows", noEmail)
+	}
+	var unconsented int
+	pool.QueryRow(ctx, `select count(*) from messages m join users u on u.id=m.user_id
+		where m.campaign_id=$1 and ((m.channel='email' and u.email_consent is not true) or (m.channel='sms' and u.sms_consent is not true))`,
+		id).Scan(&unconsented)
+	if unconsented != 0 {
+		t.Fatalf("%d messages queued without consent", unconsented)
 	}
 	if res.Enqueued["sms"] == 0 || res.Enqueued["email"] == 0 {
 		t.Fatalf("enqueued = %v", res.Enqueued)
@@ -258,4 +278,67 @@ func TestWorstCaseFor(t *testing.T) {
 	if wc.LongestFirstName != "Abdurrahman Muhammed" || wc.LongestCity != "İstanbul" {
 		t.Fatalf("wc = %+v", wc)
 	}
+}
+
+// TestApproveSmallPoolNoDeadlock: Approve must use a single connection while
+// it holds the campaign lock, so a burst of approvals on a 4-connection pool
+// (8 distinct campaigns + 8 on one campaign) finishes.
+func TestApproveSmallPoolNoDeadlock(t *testing.T) {
+	big := seeded(t)
+	ctx := context.Background()
+	ids := make([]uuid.UUID, 8)
+	for i := range ids {
+		ids[i] = readyCampaign(t, big, istanbulAbandoned())
+	}
+	small, err := db.Open(ctx, dbtest.URL(t)+"&pool_max_conns=4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer small.Close()
+
+	type result struct {
+		id  uuid.UUID
+		err error
+	}
+	targets := append(append([]uuid.UUID{}, ids...), repeatID(ids[0], 8)...)
+	results := make(chan result, len(targets))
+	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	for _, id := range targets {
+		go func() {
+			<-start
+			_, err := campaign.Approve(tctx, small, id, campaign.ApproveRequest{})
+			results <- result{id, err}
+		}()
+	}
+	close(start)
+	success := map[uuid.UUID]int{}
+	for range targets {
+		select {
+		case r := <-results:
+			switch {
+			case r.err == nil:
+				success[r.id]++
+			case errors.Is(r.err, campaign.ErrAlreadyApproved):
+			default:
+				t.Fatalf("approve %s: %v", r.id, r.err)
+			}
+		case <-time.After(35 * time.Second):
+			t.Fatal("approvals hung (pool deadlock)")
+		}
+	}
+	for _, id := range ids {
+		if success[id] != 1 {
+			t.Fatalf("campaign %s: %d successes, want 1", id, success[id])
+		}
+	}
+}
+
+func repeatID(id uuid.UUID, n int) []uuid.UUID {
+	out := make([]uuid.UUID, n)
+	for i := range out {
+		out[i] = id
+	}
+	return out
 }
