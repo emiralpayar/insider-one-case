@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -360,20 +361,27 @@ func TestUncertainNonIdempotentIsUnknown(t *testing.T) {
 // A recovered row may already have been delivered: even if consent was
 // revoked meanwhile it must be reported unknown, not skipped_no_consent.
 func TestRecoveredCheckedBeforeConsent(t *testing.T) {
-	pool := newDB(t, 300)
-	camp := insertCampaign(t, pool, "sending")
-	ids := insertMessages(t, pool, camp, "sms", 1)
-	mustExec(t, pool, `update users set sms_consent=false`)
-	mustExec(t, pool, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
-	_, srv := newMock(t, mockprovider.Config{Idempotency: false})
-	cp := newCounting(NewHTTPProvider(srv.URL, false, 5*time.Second))
+	// A recovered row may already have been delivered; with consent revoked
+	// it must be 'unknown' (not skipped_no_consent) and never resent, even
+	// when the provider could deduplicate.
+	for _, idem := range []bool{false, true} {
+		t.Run(fmt.Sprintf("idempotent=%v", idem), func(t *testing.T) {
+			pool := newDB(t, 300)
+			camp := insertCampaign(t, pool, "sending")
+			ids := insertMessages(t, pool, camp, "sms", 1)
+			mustExec(t, pool, `update users set sms_consent=false`)
+			mustExec(t, pool, `update messages set status='sending', attempts=1, locked_until=now()-interval '1 second' where id=$1`, ids[0])
+			_, srv := newMock(t, mockprovider.Config{Idempotency: idem})
+			cp := newCounting(NewHTTPProvider(srv.URL, idem, 5*time.Second))
 
-	runAll(t, newDispatcher(pool, cp, "sms"))
-	waitFor(t, 20*time.Second, "terminal", allTerminal(t, pool, camp))
-	if r := getMessage(t, pool, ids[0]); r.Status != "unknown" {
-		t.Fatalf("got %+v", r)
-	}
-	if cp.Total() != 0 {
-		t.Fatalf("provider called %d times", cp.Total())
+			runAll(t, newDispatcher(pool, cp, "sms"))
+			waitFor(t, 20*time.Second, "terminal", allTerminal(t, pool, camp))
+			if r := getMessage(t, pool, ids[0]); r.Status != "unknown" {
+				t.Fatalf("got %+v", r)
+			}
+			if cp.Total() != 0 {
+				t.Fatalf("provider called %d times", cp.Total())
+			}
+		})
 	}
 }

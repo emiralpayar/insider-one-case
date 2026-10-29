@@ -22,7 +22,7 @@ const (
 	jobTimeout      = 30 * time.Second // DB updates of one job; outlives token wait + provider timeout
 	defaultRetryAft = time.Second
 	maxRetryAfter   = 10 * time.Second // clamp for provider Retry-After (pause and reschedule)
-	minLeaseLeft    = 5 * time.Second  // do not start a send with less lease than this left
+	minLeaseLeft    = 10 * time.Second // do not start a send with less lease than this left (> provider timeout)
 )
 
 // Dispatcher sends one channel's queued messages. Any number of Dispatchers
@@ -243,6 +243,12 @@ func (d *Dispatcher) process(leadCtx context.Context, j Job) {
 		// A previous worker died mid-request: it may have been delivered and
 		// the provider cannot deduplicate a resend. At-most-once.
 		mark("unknown", d.Store.MarkUnknown(ctx, j, "worker crashed mid-send"))
+		return
+	}
+	if j.Recovered && !j.HasConsent {
+		// May already have been delivered, but consent was revoked since:
+		// never resend without consent, even to an idempotent provider.
+		mark("unknown", d.Store.MarkUnknown(ctx, j, "crashed mid-send; consent since revoked"))
 		return
 	}
 	if j.Recovered && j.Attempts > d.MaxAttempts {

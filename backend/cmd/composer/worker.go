@@ -30,7 +30,11 @@ func runWorker(dbURL string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	pool, err := db.Open(ctx, withPoolSize(dbURL, 30))
+	channels := []string{"sms", "email"}
+	// Per channel: the leader's lock connection, its claim query and up to
+	// senderConcurrency senders recording results; plus the campaign
+	// completion loop and /healthz.
+	pool, err := db.Open(ctx, withPoolSize(dbURL, len(channels)*(senderConcurrency+2)+2))
 	if err != nil {
 		return err
 	}
@@ -68,10 +72,10 @@ func runWorker(dbURL string) error {
 	}()
 
 	var wg sync.WaitGroup
-	for _, ch := range []string{"sms", "email"} {
+	for _, ch := range channels {
 		d := &queue.Dispatcher{
 			Pool: pool, Store: queue.NewStore(pool), Provider: provider, Channel: ch,
-			Limiter: queue.NewLimiter(100, time.Now), Metrics: m,
+			Limiter: queue.NewLimiter(100, time.Now), Metrics: m, Concurrency: senderConcurrency,
 		}
 		wg.Add(1)
 		go func() {
@@ -123,9 +127,11 @@ func envOr(k, def string) string {
 	return def
 }
 
-// withPoolSize sets pool_max_conns unless the URL already does: each channel
-// leader holds one connection for its lock and up to 20 concurrent senders
-// write results.
+// senderConcurrency is the number of parallel provider calls per channel.
+const senderConcurrency = 20
+
+// withPoolSize sets pool_max_conns unless the URL already does (the caller
+// sizes it so every concurrent DB user of the worker gets a connection).
 func withPoolSize(dbURL string, n int) string {
 	u, err := url.Parse(dbURL)
 	if err != nil || u.Scheme == "" {
