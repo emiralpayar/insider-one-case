@@ -75,9 +75,11 @@ func checkField(path, text string, required bool, limit int, code, msgFmt string
 				Message: fmt.Sprintf("Bilinmeyen değişken: %s (izin verilenler: first_name, city)", t.text)})
 		}
 	}
-	if len(errs) > 0 || limit == 0 {
+	if limit == 0 {
 		return errs
 	}
+	// Checked even when placeholders are broken, so a repair round sees every
+	// problem at once. Unknown/malformed tokens render raw: an over-estimate.
 	longest := map[string]string{"first_name": wc.LongestFirstName, "city": wc.LongestCity}
 	n := max(
 		utf8.RuneCountInString(Render(text, longest)),

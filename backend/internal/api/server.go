@@ -133,7 +133,7 @@ func (s *Server) requireLLM(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // llmFailure maps an error from a Composer call. Errors without a specific
-// mapping (transport, timeout, truncation) become 502 llm_error.
+// mapping (transport, timeout) become 502 llm_error.
 func llmFailure(err error) error {
 	if ae := toAPIError(err); ae.Code != "internal" {
 		return err

@@ -52,6 +52,9 @@ func toAPIError(err error) *apiError {
 			Message: "Doğrulama başarısız", Details: vl}
 	case errors.Is(err, llm.ErrRefusal):
 		return &apiError{Status: http.StatusUnprocessableEntity, Code: "llm_refused", Message: "Model isteği reddetti"}
+	case errors.Is(err, llm.ErrTruncated):
+		return &apiError{Status: http.StatusUnprocessableEntity, Code: "llm_truncated",
+			Message: "Model yanıtı uzunluk sınırında kesildi"}
 	case errors.Is(err, campaign.ErrNotFound):
 		return errNotFound
 	case errors.Is(err, campaign.ErrLocked):

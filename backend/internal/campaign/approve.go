@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/emiralpayar/campaign-composer/internal/content"
 	"github.com/emiralpayar/campaign-composer/internal/segment"
@@ -67,20 +68,18 @@ func Approve(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, req ApproveR
 	if len(errs) > 0 {
 		return ApproveResult{}, errs
 	}
-	wc, err := WorstCaseFor(ctx, tx, rule, asOf)
-	if err != nil {
-		return ApproveResult{}, err
-	}
-	if errs := content.Validate(*c.Content, c.Channels, wc); len(errs) > 0 {
-		return ApproveResult{}, errs
-	}
-	// The size decision uses data read in this transaction (same snapshot as
-	// the rows we queue) and never takes a second pool connection while the
-	// campaign row is locked.
+	// The audience is read by one statement in this transaction (no second
+	// pool connection while the campaign row is locked). The worst case is
+	// computed from those same rows, so it matches exactly what we queue.
 	users, err := audience(ctx, tx, rule, asOf)
 	if err != nil {
 		return ApproveResult{}, err
 	}
+	if errs := content.Validate(*c.Content, c.Channels, worstCaseOf(users)); len(errs) > 0 {
+		return ApproveResult{}, errs
+	}
+	// The total is a separate statement (READ COMMITTED: a fresh snapshot);
+	// it only feeds the >50% warning, where a concurrent insert is harmless.
 	var allUsers int
 	if err := tx.QueryRow(ctx, `select count(*) from users`).Scan(&allUsers); err != nil {
 		return ApproveResult{}, err
@@ -120,6 +119,21 @@ type recipientUser struct {
 	firstName, city          string
 	phone, email             string
 	smsConsent, emailConsent bool
+}
+
+// worstCaseOf returns the longest first name and city among users (the
+// first one, by id, on ties); empty fields fall back to content defaults.
+func worstCaseOf(users []recipientUser) content.WorstCase {
+	var wc content.WorstCase
+	for _, u := range users {
+		if utf8.RuneCountInString(u.firstName) > utf8.RuneCountInString(wc.LongestFirstName) {
+			wc.LongestFirstName = u.firstName
+		}
+		if utf8.RuneCountInString(u.city) > utf8.RuneCountInString(wc.LongestCity) {
+			wc.LongestCity = u.city
+		}
+	}
+	return wc
 }
 
 func audience(ctx context.Context, tx pgx.Tx, r segment.Rule, asOf time.Time) ([]recipientUser, error) {

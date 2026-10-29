@@ -33,7 +33,7 @@ func NewAnthropic(apiKey, model string) Client {
 func (a *anthropicClient) Name() string { return "anthropic" }
 
 // Complete streams the response, forwarding text deltas to onDelta. A refusal
-// returns ErrRefusal; hitting max_tokens is an error (the JSON is truncated).
+// returns ErrRefusal; hitting max_tokens returns ErrTruncated.
 func (a *anthropicClient) Complete(ctx context.Context, req Request, onDelta func(string)) (Response, error) {
 	stream := a.client.Messages.NewStreaming(ctx, buildParams(a.model, req))
 	defer stream.Close()
@@ -61,7 +61,7 @@ func (a *anthropicClient) Complete(ctx context.Context, req Request, onDelta fun
 	case anthropic.StopReasonRefusal:
 		return resp, fmt.Errorf("%w (category %q)", ErrRefusal, msg.StopDetails.Category)
 	case anthropic.StopReasonMaxTokens:
-		return resp, fmt.Errorf("llm: anthropic: output truncated at max_tokens")
+		return resp, fmt.Errorf("llm: anthropic: %w", ErrTruncated)
 	}
 	return resp, nil
 }

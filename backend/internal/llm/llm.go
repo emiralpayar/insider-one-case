@@ -46,6 +46,10 @@ type Response struct {
 // ErrRefusal is returned when the model refuses to answer.
 var ErrRefusal = errors.New("llm: model refused the request")
 
+// ErrTruncated is returned when the output hit the max_tokens ceiling (the
+// JSON is cut off).
+var ErrTruncated = errors.New("llm: output truncated at max_tokens")
+
 // InvalidOutputError means the model output still failed validation after all
 // repair attempts.
 type InvalidOutputError struct {

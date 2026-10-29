@@ -369,6 +369,21 @@ func TestPutSegmentInvalidRule(t *testing.T) {
 		t.Fatalf("preview: %d %s", r.Code, r.Body)
 	}
 
+	// A filtered rule with no conditions is rejected ("all" must be explicit).
+	none := map[string]any{"rule": map[string]any{"audience": "filtered", "conditions": []any{}, "unmapped": []string{}, "explanation": ""}}
+	r = do(t, srv, "PUT", "/api/campaigns/"+id+"/segment", none)
+	if r.Code != http.StatusUnprocessableEntity || !strings.Contains(string(r.Body), `"empty_conditions"`) {
+		t.Fatalf("empty filtered rule: %d %s", r.Code, r.Body)
+	}
+	// The explanation is saved as given: a hand-edited rule clears it.
+	good["rule"].(map[string]any)["explanation"] = ""
+	if r = do(t, srv, "PUT", "/api/campaigns/"+id+"/segment", good); r.Code != 200 {
+		t.Fatalf("hand-edited rule: %d %s", r.Code, r.Body)
+	}
+	if r = do(t, srv, "GET", "/api/campaigns/"+id, nil); !strings.Contains(string(r.Body), `"explanation":""`) {
+		t.Fatalf("explanation not cleared: %s", r.Body)
+	}
+
 	// content PUT: too-long SMS rejected, valid saved
 	long := map[string]any{"content": map[string]any{"sms": strings.Repeat("a", 170),
 		"email": map[string]string{"subject": "s", "preheader": "", "body": "b"}}}

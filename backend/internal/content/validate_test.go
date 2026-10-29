@@ -79,6 +79,14 @@ func TestValidateBrokenPlaceholders(t *testing.T) {
 	}
 }
 
+func TestValidateLengthCheckedDespitePlaceholderErrors(t *testing.T) {
+	// Both problems are reported at once so one LLM repair round can fix both.
+	errs := Validate(Content{SMS: "{{phone}} " + strings.Repeat("a", 400)}, []string{"sms"}, wc)
+	if find(errs, "sms", "unknown_variable") == nil || find(errs, "sms", "sms_too_long") == nil {
+		t.Fatal(errs)
+	}
+}
+
 func TestValidateSingleBracesOK(t *testing.T) {
 	if errs := Validate(Content{SMS: "a { b } c {x}"}, []string{"sms"}, wc); len(errs) != 0 {
 		t.Fatal(errs)

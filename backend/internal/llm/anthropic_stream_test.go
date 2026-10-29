@@ -99,7 +99,7 @@ func TestAnthropicStreamRefusal(t *testing.T) {
 func TestAnthropicStreamMaxTokens(t *testing.T) {
 	c := fakeAnthropic(t, cannedStream([]string{`{"sms":"yar`}, "max_tokens", false))
 	resp, err := c.Complete(context.Background(), segReq, nil)
-	if err == nil || errors.Is(err, ErrRefusal) || !strings.Contains(err.Error(), "max_tokens") {
+	if !errors.Is(err, ErrTruncated) || errors.Is(err, ErrRefusal) || !strings.Contains(err.Error(), "max_tokens") {
 		t.Fatalf("err = %v", err)
 	}
 	if resp.Text != `{"sms":"yar` {
