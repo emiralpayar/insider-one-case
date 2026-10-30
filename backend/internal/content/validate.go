@@ -3,6 +3,7 @@ package content
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/emiralpayar/campaign-composer/internal/verr"
@@ -65,7 +66,8 @@ func checkField(path, text string, required bool, limit int, code, msgFmt string
 		}
 		return errs
 	}
-	for _, t := range scan(text) {
+	toks := scan(text)
+	for i, t := range toks {
 		switch {
 		case t.kind == tokBad:
 			errs = append(errs, verr.Error{Path: path, Code: "malformed_placeholder",
@@ -73,6 +75,9 @@ func checkField(path, text string, required bool, limit int, code, msgFmt string
 		case t.kind == tokVar && !allowedVars[t.text]:
 			errs = append(errs, verr.Error{Path: path, Code: "unknown_variable",
 				Message: fmt.Sprintf("Bilinmeyen değişken: %s (izin verilenler: first_name, city)", t.text)})
+		case t.kind == tokVar && i+1 < len(toks) && toks[i+1].kind == tokLit && gluedSuffix(toks[i+1].text):
+			errs = append(errs, verr.Error{Path: path, Code: "placeholder_suffix",
+				Message: fmt.Sprintf("{{%s}} değişkenine ek getirilmiş; değer bilinmediği için ek bazı alıcılarda yanlış olur (ör. \"{{city}} için\" yazın)", t.text)})
 		}
 	}
 	if limit == 0 {
@@ -89,4 +94,11 @@ func checkField(path, text string, required bool, limit int, code, msgFmt string
 		errs = append(errs, verr.Error{Path: path, Code: code, Message: fmt.Sprintf(msgFmt, n, limit)})
 	}
 	return errs
+}
+
+// gluedSuffix reports whether lit, the text right after a placeholder, starts
+// with a suffix attached to it: an apostrophe or a letter.
+func gluedSuffix(lit string) bool {
+	r, _ := utf8.DecodeRuneInString(lit)
+	return r == '\'' || r == '’' || unicode.IsLetter(r)
 }

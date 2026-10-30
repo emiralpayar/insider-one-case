@@ -112,6 +112,8 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 **Neden:** İki iş de kısa ve iyi tanımlı. Segment çıktısı her durumda backend doğrulamasından geçiyor, içerik limitlerini onarım döngüsü yakalıyor. Opus'un ek gücü bu işlerde maliyet ve gecikmeye değmez. Haiku 5.5 içerik için çok daha ucuz ve hızlı, ama Türkçe "samimi ama kısa" metin kalitesi ölçülmeden varsayılan yapılmadı. Golden brief seti iki modelle çalıştırılıp onarım oranı, gecikme ve metin kalitesi karşılaştırılacak, sonuç buraya yazılacak.
 
+**Ölçüm (2026-10-30, örnek brief, canlı API, küçük örneklem):** İki model de kuralı ilk denemede doğru çıkardı (`abandoned_cart within_days 30` + `city in [İstanbul]`), onarım gerekmedi. Segment + içerik toplam süresi Sonnet 5.5'te 5.4–9.6 sn, Haiku 5.5'te 8.3–8.5 sn; yani Haiku burada belirgin hızlı değil. Haiku'nun metinleri doğru ama daha jenerik ("Sepetine dön ve alışverişini tamamla"); Sonnet'inkiler daha samimi ve brief'in tonuna daha yakın. Varsayılan Sonnet 5.5 kaldı. Maliyet öncelikliyse segment için Haiku env ile seçilebilir: kural backend doğrulamasından geçtiği için risk düşük. Sonnet ilk çalıştırmada `{{city}}'daki` yazdı; bu #22'yi doğurdu.
+
 ## 16. Kuyruk güncellemeleri kira token'ı ile çitlenir
 
 **Karar:** Claim'in yazdığı `locked_until` değeri bir fencing token olarak kullanılır. Tüm `Mark*` güncellemeleri `where id=$1 and status='sending' and locked_until=$2` koşuluyla çalışır; eşleşme yoksa no-op olur (`ErrLeaseLost`).
@@ -147,3 +149,9 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 **Karar:** Backend imajı `golang:1.24` ile derlenip `distroless/static` üzerine iki statik binary (`composer`, `mockprovider`) olarak konur. İmajda shell/curl olmadığından container healthcheck'leri binary'nin `healthcheck` alt komutuyla yapılır. `api` açılışta migration + boşsa seed çalıştırır; worker'lar `api` sağlıklı olunca başlar (migration sahibi tek servis). Compose'ta worker `deploy.replicas: 2`.
 
 **Neden:** Küçük, saldırı yüzeyi az imaj; tek komutla sıralı ayağa kalkış; iki worker ile kanal liderliği ve rate limit davranışı gerçek ortamda gözlenebilir.
+
+## 22. Değişkene Türkçe ek yapıştırılamaz
+
+**Karar:** `{{city}}'daki`, `{{city}}'de`, `{{first_name}}'e` gibi değişkenin hemen ardından kesme işareti ya da harf gelen metinler `placeholder_suffix` doğrulama hatası verir. İçerik prompt'u da ek gerektirmeyen kalıpları (`{{city}} için`, `Merhaba {{first_name}},`) ister.
+
+**Neden:** Türkçe ek ünlü uyumuna göre değişir. Değer bilinmediği için ek bazı alıcılarda yanlış olur ("İzmir'daki"), isim boşsa da ortada ek kalır ("Merhaba 'e"). Gerçek API ile ilk denemede Sonnet tam bunu yazdı. Kural hata olduğu için LLM'in onarım döngüsü düzeltir; pazarlamacının elle yazdığı metin de aynı kontrolden geçer. Ek render sırasında otomatik çekilebilirdi (İstanbul'da/İzmir'de), ama ünsüz sertleşmesi ve istisnalar bu case'in kapsamına göre fazla.

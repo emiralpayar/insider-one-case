@@ -52,6 +52,7 @@ Kurallar:
 - Dil her zaman Türkçe. Tonu, teklifi (indirim oranı vb.) ve aciliyeti brief'ten al; brief'te olmayan teklif, kod veya tarih uydurma.
 - Yalnızca iki değişken var: {{first_name}} ve {{city}}. Başka değişken (ör. {{phone}}, {{discount}}) KULLANMA; tek süslü parantez kullanma.
 - Uzunluk değişkenler en uzun değerle (bu kitlede isim %d, şehir %d karakter) doldurularak ölçülür: SMS en fazla %d karakter, e-posta konusu en fazla %d karakter. SMS'i kısa tut (yaklaşık 120 karakter hedefle).
+- Değişkene ek getirme ({{city}}'de, {{city}}'daki, {{first_name}}'e YANLIŞ): değer bilinmediği için ünlü uyumu tutmaz. Ek gerektirmeyen kalıp kullan ({{city}} için, Merhaba {{first_name}},).
 - İsim boş olabilir; cümle isimsiz de doğal okunmalı. "Merhaba {{first_name}}," kalıbı uygundur (isim boşsa "Merhaba," olur). İsmi cümlenin ortasına gömme.
 - E-posta: konu kısa ve çekici; preheader konuyu tamamlayan tek cümle; gövde sade metin, kısa paragraflar, net bir eylem çağrısı.
 

@@ -138,3 +138,20 @@ func TestJSONSchema(t *testing.T) {
 		t.Fatal("email should be absent")
 	}
 }
+
+// A Turkish suffix glued to a placeholder ("{{city}}'daki") follows vowel
+// harmony of a value we do not know, so it is wrong for some recipients.
+func TestValidatePlaceholderSuffix(t *testing.T) {
+	bad := []string{"{{city}}'daki fırsat", "{{city}}’de", "{{first_name}}cım", "Selam {{first_name}}'e"}
+	for _, s := range bad {
+		if find(Validate(Content{SMS: s}, []string{"sms"}, wc), "sms", "placeholder_suffix") == nil {
+			t.Errorf("%q: want placeholder_suffix", s)
+		}
+	}
+	ok := []string{"Merhaba {{first_name}}, {{city}} için", "{{city}}: fırsat", "Selam {{first_name}}!", "{{first_name}}"}
+	for _, s := range ok {
+		if errs := Validate(Content{SMS: s}, []string{"sms"}, wc); len(errs) != 0 {
+			t.Errorf("%q: %v", s, errs)
+		}
+	}
+}
