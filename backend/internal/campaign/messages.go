@@ -18,6 +18,9 @@ var MessageStatuses = []string{"queued", "sending", "sent", "failed", "unknown",
 // MessagesPerPage is the default page size of the per-recipient list.
 const MessagesPerPage = 50
 
+// MaxPage bounds the page number so (Page-1)*PerPage cannot overflow.
+const MaxPage = 100000
+
 // MessageQuery filters and pages a campaign's messages. Empty Statuses or
 // Channel means "all"; Page starts at 1.
 type MessageQuery struct {
@@ -81,6 +84,9 @@ func (q MessageQuery) Normalize() (MessageQuery, verr.List) {
 	q.Statuses = statuses
 	if q.Page < 1 {
 		q.Page = 1
+	}
+	if q.Page > MaxPage { // (Page-1)*PerPage must not overflow the OFFSET
+		return q, verr.List{{Path: "page", Code: "out_of_range", Message: fmt.Sprintf("Sayfa en fazla %d olabilir", MaxPage)}}
 	}
 	if q.PerPage < 1 || q.PerPage > 200 {
 		q.PerPage = MessagesPerPage

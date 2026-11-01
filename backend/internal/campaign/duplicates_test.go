@@ -3,6 +3,7 @@ package campaign_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/emiralpayar/campaign-composer/internal/campaign"
@@ -132,5 +133,51 @@ func TestDuplicateSimilarityCheck(t *testing.T) {
 	})
 	if err != nil || rep.SimilarityCheck != "error" || len(rep.Duplicates) != 0 {
 		t.Fatalf("on LLM error: %+v, %v", rep, err)
+	}
+}
+
+// Two identical campaigns approved at the same moment: approvals are
+// serialized, so the second sees the first's messages and needs confirmation.
+func TestConcurrentDuplicateApprovalsSerialized(t *testing.T) {
+	pool := seeded(t)
+	ctx := context.Background()
+	for round := 0; round < 3; round++ {
+		a, b := readyCampaign(t, pool, istanbulAbandoned()), readyCampaign(t, pool, istanbulAbandoned())
+		if round > 0 { // earlier rounds' campaigns would match too; isolate by brief
+			for _, id := range []uuid.UUID{a, b} {
+				if _, err := pool.Exec(ctx, `update campaigns set brief = brief || $2 where id=$1`, id, fmt.Sprint(" tur ", round)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := pool.Exec(ctx, `update campaigns set
+				content = jsonb_set(jsonb_set(content, '{sms}', to_jsonb($2::text)), '{email,body}', to_jsonb($2::text)) where id = any($1)`,
+				[]uuid.UUID{a, b}, fmt.Sprint("Tur ", round, " {{first_name}}")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		errs := make(chan error, 2)
+		start := make(chan struct{})
+		for _, id := range []uuid.UUID{a, b} {
+			go func() {
+				<-start
+				_, err := campaign.Approve(ctx, pool, id, campaign.ApproveRequest{})
+				errs <- err
+			}()
+		}
+		close(start)
+		var ok, dup int
+		for range 2 {
+			switch err := <-errs; {
+			case err == nil:
+				ok++
+			case errors.Is(err, campaign.ErrDuplicateNotConfirmed):
+				dup++
+			default:
+				t.Fatal(err)
+			}
+		}
+		if ok != 1 || dup != 1 {
+			t.Fatalf("round %d: %d approved, %d duplicate", round, ok, dup)
+		}
 	}
 }

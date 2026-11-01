@@ -170,10 +170,14 @@ func (s *Server) contentStream(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := s.store.SaveContent(ctx, c.ID, merged); err != nil {
+		stored, err := s.store.SaveContentChannels(ctx, c.ID, merged, gen)
+		if err != nil {
 			sendErr(err)
 			return
 		}
+		// The other channel may have been edited while this one streamed.
+		done.Content = stored
+		done.SMSStats = smsStats(stored, wc)
 		done.Saved = true
 	}
 	send("done", done)

@@ -172,3 +172,11 @@ func TestValidateSingleBracePlaceholder(t *testing.T) {
 		t.Fatalf("errs = %v", errs)
 	}
 }
+
+func TestValidateEmailBodyAndPreheaderLimits(t *testing.T) {
+	c := Content{Email: Email{Subject: "x", Preheader: strings.Repeat("a", PreheaderMaxChars+1), Body: strings.Repeat("a", EmailBodyMaxChars+1)}}
+	errs := Validate(c, []string{"email"}, wc)
+	if find(errs, "email.body", "body_too_long") == nil || find(errs, "email.preheader", "preheader_too_long") == nil {
+		t.Fatalf("errs = %v", errs)
+	}
+}

@@ -693,3 +693,16 @@ func TestDuplicateLLMCheck(t *testing.T) {
 		t.Fatalf("approve second: %d %s", r.Code, r.Body)
 	}
 }
+
+func TestHugePageIsRejectedNot500(t *testing.T) {
+	pool := seeded(t)
+	srv := newServer(t, pool, mockComposer(pool), "mock")
+	id := createCampaign(t, srv)
+	if r := do(t, srv, "GET", "/api/campaigns/"+id+"/messages?page=9223372036854775807", nil); r.Code >= 500 {
+		t.Fatalf("messages: %d %s", r.Code, r.Body)
+	}
+	rule := map[string]any{"audience": "all", "conditions": []any{}, "unmapped": []any{}}
+	if r := do(t, srv, "POST", "/api/segments/members", map[string]any{"rule": rule, "page": 9223372036854775807}); r.Code >= 500 {
+		t.Fatalf("members: %d %s", r.Code, r.Body)
+	}
+}

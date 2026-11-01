@@ -55,6 +55,12 @@ func Approve(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, req ApproveR
 		return ApproveResult{}, err
 	}
 	defer tx.Rollback(ctx)
+	// Serialize approvals: the duplicate-send check must see messages of an
+	// approval that is committing concurrently (READ COMMITTED would hide
+	// them). Held until commit; approvals are rare and short.
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtext('campaign:approve'))`); err != nil {
+		return ApproveResult{}, err
+	}
 
 	c, err := scan(tx.QueryRow(ctx, `select `+selectCols+` from campaigns where id=$1 for update`, id))
 	if err != nil {

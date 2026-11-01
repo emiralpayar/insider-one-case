@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/emiralpayar/campaign-composer/internal/campaign"
 	"github.com/emiralpayar/campaign-composer/internal/segment"
@@ -56,6 +58,10 @@ func (s *Server) refineSegment(w http.ResponseWriter, r *http.Request) {
 	req.Instruction = strings.TrimSpace(req.Instruction)
 	if req.Instruction == "" {
 		writeError(w, r, verr.List{{Path: "instruction", Code: "empty_field", Message: "Talimat boş olamaz"}})
+		return
+	}
+	if utf8.RuneCountInString(req.Instruction) > maxBriefRunes {
+		writeError(w, r, verr.List{{Path: "instruction", Code: "too_long", Message: fmt.Sprintf("Talimat en fazla %d karakter olabilir", maxBriefRunes)}})
 		return
 	}
 	if c.Rule == nil {

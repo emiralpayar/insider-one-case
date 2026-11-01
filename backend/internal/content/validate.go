@@ -53,8 +53,10 @@ func Validate(c Content, channels []string, wc WorstCase) verr.List {
 	if has(channels, "email") {
 		errs = append(errs, checkField("email.subject", c.Email.Subject, true, SubjectMaxChars, "subject_too_long",
 			"E-posta konusu en kötü durumda %d karakter, sınır %d", wc)...)
-		errs = append(errs, checkField("email.body", c.Email.Body, true, 0, "", "", wc)...)
-		errs = append(errs, checkField("email.preheader", c.Email.Preheader, false, 0, "", "", wc)...)
+		errs = append(errs, checkField("email.body", c.Email.Body, true, EmailBodyMaxChars, "body_too_long",
+			"E-posta gövdesi en kötü durumda %d karakter, sınır %d", wc)...)
+		errs = append(errs, checkField("email.preheader", c.Email.Preheader, false, PreheaderMaxChars, "preheader_too_long",
+			"Ön başlık en kötü durumda %d karakter, sınır %d", wc)...)
 	}
 	return errs
 }

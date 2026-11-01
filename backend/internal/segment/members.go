@@ -14,6 +14,9 @@ import (
 // MembersPerPage is the default page size of the audience list.
 const MembersPerPage = 50
 
+// MaxPage bounds page numbers of the paginated lists.
+const MaxPage = 100000
+
 // maxSearchRunes bounds the name search.
 const maxSearchRunes = 100
 
@@ -56,6 +59,9 @@ func (q MemberQuery) Normalize() (MemberQuery, verr.List) {
 	}
 	if q.Page < 1 {
 		q.Page = 1
+	}
+	if q.Page > MaxPage { // (Page-1)*PerPage must not overflow the OFFSET
+		return q, verr.List{{Path: "page", Code: "out_of_range", Message: fmt.Sprintf("Sayfa en fazla %d olabilir", MaxPage)}}
 	}
 	if q.PerPage < 1 || q.PerPage > 200 {
 		q.PerPage = MembersPerPage

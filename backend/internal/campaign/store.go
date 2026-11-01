@@ -165,6 +165,40 @@ func (s *Store) SaveContent(ctx context.Context, id uuid.UUID, c content.Content
 	return nil
 }
 
+// SaveContentChannels stores only the given channels' parts of c ("sms",
+// "email"), merged into the stored content in one statement, and returns the
+// content as stored. A regeneration of one channel therefore cannot
+// overwrite an edit of the other channel saved while it was streaming.
+func (s *Store) SaveContentChannels(ctx context.Context, id uuid.UUID, c content.Content, channels []string) (content.Content, error) {
+	part := map[string]any{}
+	for _, ch := range channels {
+		switch ch {
+		case "sms":
+			part["sms"] = c.SMS
+		case "email":
+			part["email"] = c.Email
+		}
+	}
+	b, err := json.Marshal(part)
+	if err != nil {
+		return content.Content{}, err
+	}
+	var stored []byte
+	err = s.pool.QueryRow(ctx, `update campaigns
+		set content = coalesce(content, '{"sms":"","email":{"subject":"","preheader":"","body":""}}'::jsonb) || $2::jsonb,
+		    status='content_ready', updated_at=now()
+		where id=$1 and status in ('audience_ready','content_ready')
+		returning content`, id, b).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return content.Content{}, s.whyNot(ctx, id)
+	}
+	if err != nil {
+		return content.Content{}, err
+	}
+	var out content.Content
+	return out, json.Unmarshal(stored, &out)
+}
+
 // ValidateChannels checks a channel selection: non-empty subset of sms/email.
 // It returns the de-duplicated list in canonical order.
 func ValidateChannels(chs []string) ([]string, verr.List) {

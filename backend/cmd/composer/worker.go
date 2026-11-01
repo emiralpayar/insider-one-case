@@ -38,7 +38,15 @@ func runWorker(dbURL string) error {
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
+	// pool.Close waits for every acquired connection; after the shutdown
+	// grace it is skipped so in-flight sends cannot hold the exit (their
+	// leases expire and the rows are recovered).
+	closePool := true
+	defer func() {
+		if closePool {
+			pool.Close()
+		}
+	}()
 
 	providerURL := envOr("PROVIDER_URL", "http://localhost:8081")
 	idem := true
@@ -113,6 +121,7 @@ func runWorker(dbURL string) error {
 	case <-done:
 	case <-time.After(shutdownGrace):
 		log.Println("worker: in-flight sends did not finish in time; leases will expire and be recovered")
+		closePool = false
 	}
 	sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
