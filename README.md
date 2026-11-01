@@ -32,12 +32,16 @@ Hızlı kontrol: arayüzde örnek brief'i ("Son 30 günde sepetine ürün ekleyi
 
 `make up` aynı şeyi arka planda yapar ve tüm servisler sağlıklı olunca döner. Kapatmak için: `docker compose down -v` (veya `make down`) (`-v` veritabanı volume'unu da siler; bir sonraki açılışta seed yeniden yüklenir).
 
+## Arayüz
+
+Sol menülü tek sayfa uygulama: kampanya listesi (durum ve kanal rozetleri, özet sayılar) ve 5 adımlı composer (Brief → Kitle → İçerik → Onay → Gönderim). Her adım geçişinde sayfa en üstten başlar; ulaşılamayan adımlar adım göstergesinde kapalıdır. Kitle adımında koşul formu, Claude'un açıklaması, canlı kişi sayıları ve örnek kişiler; içerik adımında değişken etiketli editörler, uzunluk ve SMS parça göstergesi, telefon/gelen kutusu önizlemesi; gönderim adımında genel ilerleme, kanal bazında ilerleme çubukları ve saniyelik hız, sabit boyutlu ve kaydırılabilir **Gönderim günlüğü** (yeniden denemeler ve hatalar, okunur nedenlerle: "Zaman aşımı → 2. denemede gönderildi"). Üst bantlar: kırmızı = key yok, turuncu = MOCK MOD.
+
 ## Akış
 
 | Adım | Ne olur | Ne garanti edilir |
 |---|---|---|
-| 1. Kitle | Claude brief'ten JSON segment kuralı üretir; arayüz kural satırlarını, açıklamayı, kanal bazında kişi sayılarını ve uyarıları gösterir. Doğal dille düzeltme ("Ankara'yı da ekle") eski/yeni kuralı ve sayı farkını yan yana gösterir. | Kural şema + semantik doğrulamadan geçer, parametreli SQL'e derlenir; LLM çıktısı SQL olarak çalışmaz. Brief'te karşılığı olmayan ifadeler `unmapped` uyarısı olarak görünür; 0 kişilik kitle onaylanamaz, kitle tüm kullanıcıların %50'sini aşarsa ek onay kutusu zorunludur. |
-| 2. İçerik | SMS ve email (konu, preheader, gövde) SSE ile alan alan akar. Kanal bazında yeniden üretim var. | SMS ≤ 160, konu ≤ 80 karakter; uzunluk kitledeki **en uzun** isim/şehirle ve **boş** isimle render edilerek ölçülür. Yalnızca `{{first_name}}`, `{{city}}` değişkenleri kabul edilir. GSM-7 dışı karakterde UCS-2 parça sayısı uyarısı gösterilir. |
+| 1. Kitle | Claude brief'ten JSON segment kuralı üretir; arayüz kural satırlarını, açıklamayı, kanal bazında kişi sayılarını ve uyarıları gösterir. Doğal dille düzeltme ("Ankara'yı da ekle") eski/yeni kuralı ve sayı farkını yan yana gösterir. | Kural şema + semantik doğrulamadan geçer, parametreli SQL'e derlenir; LLM çıktısı SQL olarak çalışmaz. Brief'te karşılığı olmayan ifadeler `unmapped` uyarısı olarak görünür. Kitlenin tamamı eşlenemiyorsa ("VIP müşterilere") kural uydurulmaz: boş bırakılır, arayüz koşul eklemeyi ister ve kitle boşken içerik adımı ile onay kapalıdır. 0 kişilik kitle onaylanamaz; kitle tüm kullanıcıların %50'sini aşarsa ek onay kutusu zorunludur. |
+| 2. İçerik | SMS ve email (konu, preheader, gövde) SSE ile alan alan akar. Kanal bazında yeniden üretim var. Editörde `{{first_name}}` / `{{city}}` "Ad" / "Şehir" etiketleri olarak görünür ve imleç konumuna eklenebilir; saklanan metin değişmez. Önizleme telefon (SMS) ve gelen kutusu (email) görünümündedir. | SMS ≤ 160, konu ≤ 80 karakter; uzunluk kitledeki **en uzun** isim/şehirle ve **boş** isimle render edilerek ölçülür. Yalnızca `{{first_name}}`, `{{city}}` değişkenleri kabul edilir; değişkene yapışık Türkçe ek (`{{city}}'de`) reddedilir. GSM-7 dışı karakterde UCS-2 parça sayısı uyarısı gösterilir. |
 | 3. Onay | Pazarlamacı önizler (gerçek bir alıcıyla ve isimsiz render), gerekirse düzenler, kanal kapatabilir, onaylar. | Onay anında kural ve içerik backend'de yeniden doğrulanır. Tek transaction'da yalnızca **o kanalda izni olan** kullanıcılar için mesaj satırları yazılır, içerik alıcı başına render edilip saklanır. `UNIQUE (campaign_id, user_id, channel)` sayesinde çift tıklama çift mesaj üretmez. |
 | 4. Gönderim | Worker'lar kuyruktan iş alır, mock provider'a gönderir, hataları sınıflandırıp yeniden dener. | Kanal başına ≤ 100 msg/sn (birden çok worker olsa bile). Aynı kişiye aynı mesaj iki kez gitmez (idempotency key). İzin göndermeden hemen önce tekrar okunur. |
 | 5. Canlı izleme | Dashboard ≈2 sn'de bir durum endpoint'ini sorgular: kanal bazında ilerleme, durum dağılımı, saniyelik hız, gönderim günlüğü (yeniden denemeler ve hatalar). | Retry'dan sonra gönderilen mesajlar da hata geçmişiyle ve güncel durumlarıyla (`sent`) "Gönderim günlüğü"nde görünür; `unknown` mesajlar ayrıca açıklanır. |
@@ -71,12 +75,23 @@ Ayrıntılar ve bedelleri için [DECISIONS.md](DECISIONS.md).
 Claude'un çıktısı hiçbir zaman "güvenilir" kabul edilmez; her katman bir öncekinin kaçırdığını yakalar:
 
 1. **Kısıtlı çıktı alanı.** Claude SQL değil, küçük bir segment DSL'i üretir. Şema alan izin listesini, alan başına operatörleri ve değer tiplerini tanımlar; yapılandırılmış çıktı (`output_config.format` JSON schema) ile istenir. İçerik için de kanal bazında şema var (`sms`, `email.subject/preheader/body`).
-2. **Backend doğrulaması.** Çıktı bilinmeyen alanları reddeden katı JSON decode'dan, ardından semantik doğrulamadan geçer: bilinmeyen alan/operatör, aralık dışı gün sayısı, bilinmeyen şehir (Türkçe normalizasyonla: `istanbul` → `İstanbul`), çelişen koşullar, boş koşul listesi (`audience: "all"` açıkça seçilmedikçe). İçerikte en kötü durum uzunluğu, izin listesi dışı/bozuk değişkenler (`{{phone}}`, `{{first_name`) kontrol edilir.
+2. **Backend doğrulaması.** Çıktı bilinmeyen alanları reddeden katı JSON decode'dan, ardından semantik doğrulamadan geçer: bilinmeyen alan/operatör, aralık dışı gün sayısı, bilinmeyen şehir (Türkçe normalizasyonla: `istanbul` → `İstanbul`), çelişen koşullar, boş koşul listesi (yalnızca `audience: "all"` ya da eşlenemeyen kitle taslağıyla kabul). Model çıktısı ek olarak herkesi seçen yer tutucu koşulları (`order_count gte 0`) ve eşlenemeyen kitlenin `audience: "all"` ile genişletilmesini reddeder. İçerikte en kötü durum uzunluğu, izin listesi dışı/bozuk değişkenler (`{{phone}}`, `{{first_name`) ve değişkene yapışık ekler (`{{city}}'daki`: değer bilinmediği için ünlü uyumu tutmaz) kontrol edilir.
 3. **Onarım döngüsü.** Doğrulama hataları kod + alan + mesaj listesi olarak ("SMS en kötü durumda 174 karakter, 160'a indir") Claude'a geri gönderilir; en fazla 2 onarım. Sonra hata kullanıcıya gösterilir ve form ile elle düzenleme mümkündür. Refusal, `max_tokens` ile kesilmiş çıktı ve transport hataları onarılmaya çalışılmaz; loglanıp hata olarak döner.
 4. **Prompt injection.** Brief, düzeltme talimatı ve mevcut kural etiketli bloklar içinde "güvenilmeyen veri" olarak verilir. Asıl garanti promptta değil doğrulamada: brief ne derse desin çalışan şey yalnızca izin listesindeki koşullardır (`DROP TABLE` içeren alan/değerler testlerde reddediliyor).
-5. **Sessiz hata yok.** Brief'in kitleye karşılık gelmeyen kısımları (`"VIP"`, `"genç kullanıcılar"`) `unmapped` olarak döner ve arayüzde uyarı olur; çok geniş kitle ek onay ister.
+5. **Sessiz hata yok.** Brief'in kitleye karşılık gelmeyen kısımları (`"VIP"`, `"genç kullanıcılar"`) `unmapped` olarak döner ve arayüzde uyarı olur. Kitlenin tamamı eşlenemezse kural boş kalır (kimseyle eşleşmez) ve pazarlamacı koşulu elle ekler; çok geniş kitle ek onay ister.
 6. **Akış ve kayıt.** İçerik stream edilirken kısmi JSON ayrıştırılıp alanlar arayüzde dolar; tam çıktı stream sonunda doğrulanır ve yalnızca geçerliyse kaydedilir. Onarım turları SSE'de `repair` olayıyla görünür. Tüm çağrılar `llm_calls` tablosunda ve `/metrics`'te (çağrı, onarım, gecikme).
-7. **Test edilebilirlik.** `LLM` interface'inin deterministik mock implementasyonu ve senaryolu (scripted) test istemcisi var; onarım döngüsü, vazgeçme, refusal ve stream kesintisi gerçek API key olmadan test edilir. Gerçek API için ayrı bir duman testi var (`-tags=live`).
+7. **Test edilebilirlik.** `LLM` interface'inin deterministik mock implementasyonu ve senaryolu (scripted) test istemcisi var; onarım döngüsü, vazgeçme, refusal ve stream kesintisi gerçek API key olmadan test edilir. Gerçek API için bir duman testi (`-tags=live`) ve 15 brief'lik bir eval seti (`make eval`) var.
+
+### Model seçimi ve eval
+
+`make eval` 15 örnek brief'i gerçek Claude ile çalıştırır. Her brief'in beklenen kuralı tanımlıdır: koşullar birebir, `audience` ve `unmapped` beklentisiyle karşılaştırılır. Kitlesi olan her brief için içerik de üretilip doğrulanır. Set bilinçli olarak zor durumlar içerir: eşlenemeyen kitle ("VIP"), kısmen eşlenen kitle ("sadık müşterilerden İstanbul'dakiler"), "herkese", şehir hariç tutma, "hiç sipariş vermemiş" ve prompt injection (`DROP TABLE users`). Sonuçlar (2026-11-01):
+
+| Model (segment + içerik) | Doğru kural | İlk denemede | Geçerli içerik | Onarımsız içerik | Toplam süre |
+|---|---|---|---|---|---|
+| **`claude-sonnet-5-5`** (varsayılan) | **15/15** | 15 | 14/14 | 14 | 77 sn |
+| `claude-haiku-5-5` | 12/15 | 12 | 14/14 | 14 | 95 sn |
+
+Haiku'nun üç hatası da aynı türde: koşullar doğru, ama mesaj içeriğine ait ifadeleri ("memnuniyet anketi", "%30 indirim ve samimi ton") `unmapped`'e yazıyor; arayüzde bu, olmayan bir sorun için uyarı demek. Haiku bu iş yükünde daha hızlı da değil. Varsayılan bu yüzden Sonnet 5.5; model `ANTHROPIC_MODEL_SEGMENT` / `ANTHROPIC_MODEL_CONTENT` ile değiştirilebilir ([DECISIONS.md #15](DECISIONS.md)).
 
 Örnek: `docker compose exec postgres psql -U composer -c "select purpose, attempt, validation_errors, latency_ms from llm_calls order by id desc limit 10"`
 
@@ -101,12 +116,16 @@ Testler gerçek Postgres kullanır (her test kendi veritabanını açar), gerçe
 | `llm.TestSegment*`, `TestContentRepairsTooLongSMS`, `TestRefusalNotRepaired` | Onarım döngüsü: bir turda düzelir, 2 turdan sonra vazgeçer, refusal onarılmaz. |
 | `api.TestFlow`, `api.TestNoKeyReturns503` | HTTP üzerinden uçtan uca akış; key yokken 503. |
 | `campaign.TestStatusKeepsErrorOfRetriedThenSentMessage` | Retry sonrası gönderilen mesaj hata geçmişiyle dashboard'da kalır. |
-| Frontend (Vitest) | GSM-7/UCS-2 parça hesabı, kısmi JSON ayrıştırma, SSE okuyucu, kural yardımcıları. |
+| `segment.TestValidateIncompleteRule`, `TestValidateGenerated` | Eşlenemeyen kitle boş taslak olarak kalır ve kimseyle eşleşmez; modelin herkesi seçen yer tutucu koşulları reddedilir. |
+| `content.TestValidatePlaceholderSuffix` | `{{city}}'daki` gibi yapışık ekler reddedilir. |
+| Frontend (Vitest, 81 test) | GSM-7/UCS-2 parça hesabı, kısmi JSON ayrıştırma, SSE okuyucu, kural yardımcıları, değişken etiketi ↔ metin dönüşümü, gönderim günlüğü biçimlendirme. |
 
-Gerçek Claude ile duman testi (key gerekir, `make test`'e dahil değil):
+Gerçek Claude ile (key `.env`'de olmalı, `make test`'e dahil değil):
 
 ```bash
-cd backend && ANTHROPIC_API_KEY=... go test ./internal/llm -run TestAnthropicSmoke -tags=live -v
+make eval     # 15 brief'lik eval seti; kaç kuralın doğru, kaç içeriğin geçerli olduğunu tablo halinde yazar (~1-2 dk, birkaç sent)
+EVAL_CONTENT=0 make eval   # yalnızca kurallar
+cd backend && ANTHROPIC_API_KEY=... go test ./internal/llm -run TestAnthropicSmoke -tags=live -v   # tek brief duman testi
 ```
 
 CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race`, frontend test + build).
@@ -143,7 +162,8 @@ CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race
 - **A/B varyantları** (yalnızca kanal bazında "yeniden üret" var), **zamanlanmış gönderim**, **kullanıcının diline göre içerik** (tüm içerik Türkçe; kitlede `en` dilli kullanıcı varsa önizlemede bilgi notu çıkar).
 - **Kimlik doğrulama / çoklu kiracı.**
 - **Gerçek SMS/email provider entegrasyonu**; yalnızca mock provider.
-- **`make eval` ve model karşılaştırması:** golden brief setinin gerçek API ile çalıştırılması ve Sonnet 5.5 / Haiku 5.5 karşılaştırması (onarım oranı, gecikme, metin kalitesi) API key ile yapılacak; sonuç DECISIONS.md #15'e yazılacak. Şu an örnek brief'ler mock LLM fixture'larıyla `make test`'te, gerçek API için yalnızca tek bir duman testi (`-tags=live`) var.
+- **Eval setinin genişliği:** `make eval` 15 brief ile sınırlı ve içerik kalitesini (ton, ikna gücü) puanlamaz; yalnızca geçerliliği ölçer. Metin kalitesi karşılaştırması elle yapıldı.
+- **Türkçe ek çekimi:** değişkene ek yapıştırmak yasak; ekin değere göre otomatik çekilmesi (İstanbul'da / İzmir'de) yapılmadı.
 
 ## Bilinen sınırlamalar
 

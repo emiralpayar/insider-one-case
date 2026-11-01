@@ -179,7 +179,7 @@ Email body sade metin/minimal HTML. **Dil: tüm alıcılara Türkçe** (kullanı
 - Seçim: varsayılan `anthropic`. **Key yoksa sessizce mock'a düşülmez**: API açılır ama LLM endpoint'leri `503 llm_not_configured` döner, `/readyz` `llm: not_configured` raporlar, frontend kırmızı bant gösterir. Mock yalnızca testlerde ve açıkça `LLM_PROVIDER=mock` verildiğinde çalışır; bu durumda frontend kalıcı "MOCK MOD" bandı gösterir ve kampanyalar `llm_provider='mock'` olarak işaretlenir (dashboard'da görünür). `GET /api/config` → `{llm_provider, llm_configured, models}`.
 - Brief güvenilmeyen girdi kabul edilir (prompt injection): çıktı her durumda şema + semantik doğrulamadan geçer, yani brief ne derse desin çalışan şey yalnızca izin listesindeki koşullardır.
 - Tüm çağrılar `llm_calls` tablosuna yazılır.
-- Golden test seti: örnek brief'ler → beklenen kurallar (mock ile `make test`'te; isteğe bağlı `make eval` gerçek API ile).
+- Golden test seti: örnek brief'ler → beklenen kurallar (mock ile `make test`'te; `make eval` gerçek API ile — uygulandı, sonuçlar README'de).
 
 ## 9. Onay ve kuyruğa alma
 

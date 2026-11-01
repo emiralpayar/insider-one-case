@@ -65,7 +65,7 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 **Karar:**
 - Claude, brief'te karşılığı olmayan kısımları `unmapped` alanında döner. Bunlar arayüzde uyarı olarak gösterilir, sessizce atlanmaz.
-- Boş koşul listesi geçersiz, ancak açıkça `audience: "all"` ile kabul edilir.
+- Boş koşul listesi geçersiz; yalnızca açıkça `audience: "all"` ile ya da kitlenin tamamı eşlenemediğinde boş taslak olarak kabul edilir (#23).
 - Kitle tüm kullanıcıların %50'sinden fazlaysa ek onay kutusu zorunlu. 0 kişilik kitle onaylanamaz.
 
 **Neden:** En tehlikeli LLM hatası, sessizce çok geniş kitle seçmek.
@@ -110,7 +110,9 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 **Karar:** Model amaca göre ayrı seçilir: `ANTHROPIC_MODEL_SEGMENT` (varsayılan `claude-sonnet-5-5`) ve `ANTHROPIC_MODEL_CONTENT` (varsayılan `claude-sonnet-5-5`). Yapılandırılmış çıktı için structured output (JSON schema) kullanılır.
 
-**Neden:** İki iş de kısa ve iyi tanımlı. Segment çıktısı her durumda backend doğrulamasından geçiyor, içerik limitlerini onarım döngüsü yakalıyor. Opus'un ek gücü bu işlerde maliyet ve gecikmeye değmez. Haiku 5.5 içerik için çok daha ucuz ve hızlı, ama Türkçe "samimi ama kısa" metin kalitesi ölçülmeden varsayılan yapılmadı. Golden brief seti iki modelle çalıştırılıp onarım oranı, gecikme ve metin kalitesi karşılaştırılacak, sonuç buraya yazılacak.
+**Neden:** İki iş de kısa ve iyi tanımlı. Segment çıktısı her durumda backend doğrulamasından geçiyor, içerik limitlerini onarım döngüsü yakalıyor. Opus'un ek gücü bu işlerde maliyet ve gecikmeye değmez. Haiku 5.5 içerik için çok daha ucuz ve hızlı, ama Türkçe "samimi ama kısa" metin kalitesi ölçülmeden varsayılan yapılmadı. Bu yüzden iki model ölçülerek karşılaştırıldı.
+
+**Eval (2026-11-01, `make eval`, 15 brief):** Sonnet 5.5 15/15 doğru kural (hepsi ilk denemede), 14/14 geçerli içerik (onarımsız), toplam 77 sn. Haiku 5.5 12/15 doğru kural, 14/14 geçerli içerik, toplam 95 sn. Haiku'nun üç hatası da koşulda değil `unmapped`'de: mesaj içeriğine ait ifadeleri ("memnuniyet anketi") kitle diye işaretleyip yanlış uyarı üretiyor. Sonuç: varsayılan Sonnet 5.5 kalır; Haiku burada ne daha doğru ne daha hızlı.
 
 **Ölçüm (2026-10-30, örnek brief, canlı API, küçük örneklem):** İki model de kuralı ilk denemede doğru çıkardı (`abandoned_cart within_days 30` + `city in [İstanbul]`), onarım gerekmedi. Segment + içerik toplam süresi Sonnet 5.5'te 5.4–9.6 sn, Haiku 5.5'te 8.3–8.5 sn; yani Haiku burada belirgin hızlı değil. Haiku'nun metinleri doğru ama daha jenerik ("Sepetine dön ve alışverişini tamamla"); Sonnet'inkiler daha samimi ve brief'in tonuna daha yakın. Varsayılan Sonnet 5.5 kaldı. Maliyet öncelikliyse segment için Haiku env ile seçilebilir: kural backend doğrulamasından geçtiği için risk düşük. Sonnet ilk çalıştırmada `{{city}}'daki` yazdı; bu #22'yi doğurdu.
 
