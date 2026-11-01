@@ -48,6 +48,9 @@ export function defaultCondition(field: string): Condition {
   return { field, op: spec.ops[0], value: Array.isArray(v) ? [...v] : v }
 }
 
+/** A filtered rule left empty because nothing in the brief had a matching field. */
+export const isUnmappedEmpty = (r: Rule) => r.audience === 'filtered' && r.conditions.length === 0 && (r.unmapped?.length ?? 0) > 0
+
 const fmtInt = (n: unknown) => (typeof n === 'number' ? n.toLocaleString('tr-TR') : String(n))
 
 /** A human-readable sentence for a condition (used in summaries and the refine diff). */
@@ -81,7 +84,8 @@ export function describeCondition(c: Condition): string {
 }
 
 export function describeRule(r: Rule): string[] {
-  if (r.audience === 'all' || r.conditions.length === 0) return ['Tüm kullanıcılar']
+  if (r.audience === 'all') return ['Tüm kullanıcılar']
+  if (r.conditions.length === 0) return ['Koşul yok — kitle boş']
   return r.conditions.map(describeCondition)
 }
 
@@ -117,8 +121,10 @@ export const WORST_CASE_FIRST_NAME = 'Abdurrahman Muhammed'
 export function validateLocal(r: Rule): VError[] {
   const errs: VError[] = []
   // "Everyone" is never implied by an empty list (DECISIONS #8); same as the
-  // backend's empty_conditions.
-  if (r.audience === 'filtered' && r.conditions.length === 0) {
+  // backend's empty_conditions. An empty list is a valid draft when the brief
+  // could not be mapped at all (unmapped is set): the audience is then empty
+  // and approval is refused on the 0-person preview.
+  if (r.audience === 'filtered' && r.conditions.length === 0 && !(r.unmapped?.length)) {
     errs.push({ path: 'conditions', code: 'empty_conditions', message: 'En az bir koşul ekleyin ya da açıkça "Tüm kullanıcılar"ı seçin' })
   }
   r.conditions.forEach((c, i) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeCondition, worstCaseCity, defaultCondition, FIELDS, CITIES, validateLocal } from './rule'
+import { describeCondition, describeRule, isUnmappedEmpty, worstCaseCity, defaultCondition, FIELDS, CITIES, validateLocal } from './rule'
 
 describe('whitelist copy', () => {
   it('has the 14 canonical cities and 7 fields', () => {
@@ -40,5 +40,12 @@ describe('validateLocal', () => {
   it('rejects a filtered rule without conditions; "all" must be explicit', () => {
     expect(validateLocal({ audience: 'filtered', unmapped: [], explanation: '', conditions: [] }).map((e) => e.code)).toEqual(['empty_conditions'])
     expect(validateLocal({ audience: 'all', unmapped: [], explanation: '', conditions: [] })).toEqual([])
+  })
+  it('accepts an empty filtered rule when the brief was unmapped (empty audience draft)', () => {
+    const r = { audience: 'filtered' as const, unmapped: ['VIP müşteriler'], explanation: '', conditions: [] }
+    expect(validateLocal(r)).toEqual([])
+    expect(isUnmappedEmpty(r)).toBe(true)
+    expect(describeRule(r)).toEqual(['Koşul yok — kitle boş'])
+    expect(isUnmappedEmpty({ ...r, unmapped: [] })).toBe(false)
   })
 })
