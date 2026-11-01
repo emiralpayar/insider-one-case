@@ -208,7 +208,9 @@ func parseInt(raw json.RawMessage) (int64, bool) {
 
 // ValidateGenerated is Validate plus the checks that apply only to model
 // output: an unmapped audience must not be widened to everyone, either with
-// audience "all" or with a condition every user satisfies.
+// audience "all" or with a condition every user satisfies by the field's
+// range (gte its minimum, lte its maximum). Conditions that every user
+// satisfies in the data are caught by IneffectiveConditions.
 func ValidateGenerated(r Rule) (Rule, verr.List) {
 	out, errs := Validate(r)
 	if r.Audience == "all" && len(r.Unmapped) > 0 {
@@ -217,12 +219,13 @@ func ValidateGenerated(r Rule) (Rule, verr.List) {
 	}
 	for i, c := range r.Conditions {
 		spec, ok := whitelist[c.Field]
-		if !ok || c.Op != "gte" {
+		if !ok || (c.Op != "gte" && c.Op != "lte") {
 			continue
 		}
-		if n, ok := parseInt(c.Value); ok && n <= spec.min {
+		n, ok := parseInt(c.Value)
+		if ok && ((c.Op == "gte" && n <= spec.min) || (c.Op == "lte" && n >= spec.max)) {
 			errs = append(errs, verr.Error{Path: fmt.Sprintf("conditions[%d]", i), Code: "tautological_condition",
-				Message: fmt.Sprintf("%s gte %d matches every user; do not add placeholder conditions", c.Field, n)})
+				Message: fmt.Sprintf("%s %s %d matches every user; do not add placeholder conditions", c.Field, c.Op, n)})
 		}
 	}
 	return out, errs

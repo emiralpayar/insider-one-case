@@ -44,6 +44,7 @@ export const WARNING_LABEL: Record<string, string> = {
   large_audience: 'Geniş kitle',
   unmapped: 'Eşlenemeyen istek',
   mixed_language: 'Karışık dil',
+  ineffective_condition: 'Etkisiz koşul',
 }
 
 /** danger: blocks approval; warn: needs attention; info: notice. */

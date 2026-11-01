@@ -36,6 +36,10 @@ type Composer struct {
 	// (total attempts = 1 + MaxRepairs). Zero means DefaultMaxRepairs; a
 	// negative value disables repairs.
 	MaxRepairs int
+	// RuleCheck (optional) runs data-dependent checks on a generated rule
+	// that already passed ValidateGenerated, e.g. conditions every user
+	// satisfies. Its errors go to the repair loop like validation errors.
+	RuleCheck func(context.Context, segment.Rule) verr.List
 }
 
 // Event is a progress notification from Content.
@@ -78,6 +82,9 @@ func (c *Composer) rule(ctx context.Context, campaignID uuid.UUID, req Request) 
 			return errs
 		}
 		norm, errs := segment.ValidateGenerated(r)
+		if len(errs) == 0 && c.RuleCheck != nil {
+			errs = c.RuleCheck(ctx, norm)
+		}
 		if len(errs) == 0 {
 			out = norm
 		}

@@ -151,3 +151,34 @@ func TestAbandonedCartIgnoresEventsAfterAsOf(t *testing.T) {
 	}
 	t.Fatal("user with purchase after asOf should still be abandoned at asOf")
 }
+
+// A condition every user satisfies in the data is reported, even when its
+// value is inside the field's range (nobody has 500 orders).
+func TestIneffectiveConditions(t *testing.T) {
+	pool := seeded(t)
+	ctx := context.Background()
+	r := filtered(cond("city", "in", []string{"İstanbul"}), cond("order_count", "lte", 500), cond("total_spent", "gte", 0))
+	got, err := segment.IneffectiveConditions(ctx, pool, r, seedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("ineffective = %v, want [1 2]", got)
+	}
+	p, err := segment.Preview(ctx, pool, r, seedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, w := range p.Warnings {
+		if w.Code == "ineffective_condition" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("warnings = %+v", p.Warnings)
+	}
+	if got, _ := segment.IneffectiveConditions(ctx, pool, istanbulAbandoned(), seedNow); len(got) != 0 {
+		t.Fatalf("narrowing rule reported ineffective: %v", got)
+	}
+}

@@ -177,6 +177,8 @@ func TestValidateGenerated(t *testing.T) {
 		{segment.Rule{Audience: "all", Unmapped: []string{"VIP"}}, "all_with_unmapped"},
 		{filtered(cond("order_count", "gte", 0)), "tautological_condition"},
 		{filtered(cond("total_spent", "gte", 0)), "tautological_condition"},
+		{filtered(cond("order_count", "lte", 1000)), "tautological_condition"},
+		{filtered(cond("total_spent", "lte", 1000000)), "tautological_condition"},
 	}
 	for _, c := range cases {
 		_, errs := segment.ValidateGenerated(c.r)
@@ -192,6 +194,7 @@ func TestValidateGenerated(t *testing.T) {
 		{Audience: "all"},
 		{Audience: "filtered", Unmapped: []string{"VIP"}},
 		filtered(cond("order_count", "gte", 1)),
+		filtered(cond("order_count", "lte", 999)),
 	}
 	for _, r := range ok {
 		if _, errs := segment.ValidateGenerated(r); len(errs) != 0 {

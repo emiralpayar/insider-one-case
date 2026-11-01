@@ -16,6 +16,7 @@ import (
 	"github.com/emiralpayar/campaign-composer/internal/db"
 	"github.com/emiralpayar/campaign-composer/internal/llm"
 	"github.com/emiralpayar/campaign-composer/internal/seed"
+	"github.com/emiralpayar/campaign-composer/internal/segment"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -119,12 +120,14 @@ func selectLLM(pool *pgxpool.Pool) (provider string, models api.Models, c *llm.C
 			SegmentClient: llm.NewAnthropic(key, models.Segment),
 			ContentClient: llm.NewAnthropic(key, models.Content),
 			Log:           llm.NewPGCallLogger(pool),
+			RuleCheck:     segment.IneffectiveCheck(pool),
 		}, nil
 	case "mock":
 		models = api.Models{Segment: "mock", Content: "mock"}
 		log.Printf("LLM: provider=mock (LLM_PROVIDER=mock) — deterministic fixtures, NOT a real model")
 		return provider, models, &llm.Composer{
 			SegmentClient: llm.NewMock(), ContentClient: llm.NewMock(), Log: llm.NewPGCallLogger(pool),
+			RuleCheck: segment.IneffectiveCheck(pool),
 		}, nil
 	default:
 		return "", models, nil, fmt.Errorf("unknown LLM_PROVIDER %q (anthropic|mock)", provider)

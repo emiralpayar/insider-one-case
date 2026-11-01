@@ -3,12 +3,14 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/emiralpayar/campaign-composer/internal/content"
 	"github.com/emiralpayar/campaign-composer/internal/segment"
+	"github.com/emiralpayar/campaign-composer/internal/verr"
 	"github.com/google/uuid"
 )
 
@@ -95,6 +97,27 @@ func TestSegmentRepairsOnce(t *testing.T) {
 	}
 	if len(l.recs[1].ValidationErrors) != 0 || l.recs[1].Attempt != 2 {
 		t.Fatalf("second record = %+v", l.recs[1])
+	}
+}
+
+func TestSegmentRuleCheckRepairs(t *testing.T) {
+	everyone := `{"audience":"filtered","conditions":[{"field":"order_count","op":"lte","value":500}],"unmapped":["VIP"],"explanation":"x"}`
+	s := NewScripted(everyone, validRule)
+	c := newComposer(s, &memLog{})
+	c.RuleCheck = func(_ context.Context, r segment.Rule) verr.List {
+		for i, cd := range r.Conditions {
+			if cd.Field == "order_count" {
+				return verr.List{{Path: fmt.Sprintf("conditions[%d]", i), Code: "tautological_condition", Message: "matches every user"}}
+			}
+		}
+		return nil
+	}
+	r, err := c.Segment(context.Background(), uuid.New(), "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Conditions) != 2 || !strings.Contains(lastUser(s.Calls()[1]), "tautological_condition") {
+		t.Fatalf("rule = %+v, repair = %q", r, lastUser(s.Calls()[1]))
 	}
 }
 

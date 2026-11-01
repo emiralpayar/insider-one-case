@@ -92,6 +92,14 @@ func Preview(ctx context.Context, pool *pgxpool.Pool, r Rule, asOf time.Time) (P
 	if len(r.Unmapped) > 0 {
 		p.Warnings = append(p.Warnings, Warning{"unmapped", fmt.Sprintf("Parts of the brief could not be mapped: %v", r.Unmapped)})
 	}
+	ineff, err := IneffectiveConditions(ctx, pool, r, asOf)
+	if err != nil {
+		return p, err
+	}
+	for _, i := range ineff {
+		p.Warnings = append(p.Warnings, Warning{"ineffective_condition",
+			fmt.Sprintf("%d. koşul (%s) tüm kullanıcıları kapsıyor; kitleyi daraltmıyor.", i+1, describe(r.Conditions[i]))})
+	}
 	if p.EnglishSpeakers > 0 {
 		p.Warnings = append(p.Warnings, Warning{"mixed_language", fmt.Sprintf("%d English-speaking users are in the audience.", p.EnglishSpeakers)})
 	}
@@ -111,3 +119,6 @@ func SizeWarnings(total, allUsers int) []Warning {
 	}
 	return w
 }
+
+// describe renders a condition compactly for warnings ("order_count lte 1000").
+func describe(c Condition) string { return c.Field + " " + c.Op + " " + string(c.Value) }
