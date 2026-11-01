@@ -105,6 +105,7 @@ func New(cfg Config) *Server {
 			r.Put("/channels", s.putChannels)
 			r.Post("/approve", s.approve)
 			r.Get("/status", s.status)
+			r.Get("/messages", s.listMessages)
 		})
 	})
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
