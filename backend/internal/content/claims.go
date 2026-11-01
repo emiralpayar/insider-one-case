@@ -33,10 +33,17 @@ var thousandsRe = regexp.MustCompile(`^\d{1,3}(?:\.\d{3})+$`)
 // "15" (or "50.00" and "5000") apart: dots are dropped only in thousands
 // grouping, and a comma is the decimal separator.
 func normNumber(s string) string {
-	if thousandsRe.MatchString(s) {
-		return strings.ReplaceAll(s, ".", "")
+	intPart, frac, hasFrac := s, "", false
+	if i := strings.LastIndex(s, ","); i >= 0 { // "5.000,00" → "5.000" + "00"
+		intPart, frac, hasFrac = s[:i], s[i+1:], true
 	}
-	return strings.ReplaceAll(s, ",", ".")
+	if thousandsRe.MatchString(intPart) {
+		intPart = strings.ReplaceAll(intPart, ".", "")
+	}
+	if hasFrac {
+		return intPart + "." + frac
+	}
+	return intPart
 }
 
 // UnrequestedClaims reports promises in c (stock, delivery, warranty,

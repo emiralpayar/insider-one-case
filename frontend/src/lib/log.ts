@@ -23,7 +23,9 @@ export function humanReason(raw: string): string {
     const head = humanReason(s.replace(/;.*$/, ''))
     return [head, ...notes].join(' · ')
   }
-  if (/^worker crashed mid-send/.test(s) || /^crashed mid-send/.test(s)) return 'Worker gönderim sırasında durdu'
+  if (/^worker crashed mid-send/.test(s)) return 'Worker gönderim sırasında durdu'
+  if (/^consent revoked after a possibly delivered attempt/.test(s)) return 'İzin geri çekildi · önceki deneme ulaşmış olabilir'
+  if (/consent since revoked/.test(s)) return 'Worker gönderim sırasında durdu · izin sonra geri çekildi'
   if (/^consent revoked/.test(s)) return 'İzin gönderimden önce geri çekildi'
 
   const http = /\bHTTP (\d{3})\b/.exec(s)

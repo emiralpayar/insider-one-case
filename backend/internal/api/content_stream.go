@@ -145,8 +145,12 @@ func (s *Server) contentStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Merge into the content as it is now, not as it was when the stream
+	// started: the other channel may have been edited and saved meanwhile.
 	merged := content.Content{}
-	if c.Content != nil {
+	if fresh, err := s.store.Get(ctx, c.ID); err == nil && fresh.Content != nil {
+		merged = *fresh.Content
+	} else if c.Content != nil {
 		merged = *c.Content
 	}
 	for _, ch := range gen {

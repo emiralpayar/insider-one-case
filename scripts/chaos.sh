@@ -54,6 +54,9 @@ before=$(curl -sf "$PROVIDER/v1/stats")
 delivered_before=$(echo "$before" | field delivered)
 concurrent_before=$(echo "$before" | field concurrent_same_key)
 resent_before=$(echo "$before" | field resent_after_ack)
+# An older mock-provider image lacks these counters; empty would read as 0.
+[ -n "$concurrent_before" ] && [ -n "$resent_before" ] ||
+  fail "mock provider has no concurrent_same_key/resent_after_ack counters; rebuild it (make up)"
 
 say "1) Kampanya oluşturuluyor (herkese, SMS + e-posta)"
 id=$(json -X POST "$API/campaigns" -d '{"brief":"Chaos test: worker gönderim ortasında öldürülüyor."}' | sed -nE 's/.*"id":"([0-9a-f-]{36})".*/\1/p')

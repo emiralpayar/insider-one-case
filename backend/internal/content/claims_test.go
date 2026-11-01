@@ -27,6 +27,9 @@ func TestUnrequestedClaims(t *testing.T) {
 		{"ascii I folds like Turkish", "Ücretsiz IADE ve GARANTI vurgula.",
 			Content{SMS: "Ücretsiz iade ve garanti!", Email: Email{Subject: "x", Body: "Sınırlı SAYIDA"}},
 			[]string{"email.body"}},
+		{"thousands with decimals", "5.000,00 TL üzeri.",
+			Content{SMS: "5000,00 TL", Email: Email{Subject: "5.000,00", Body: "1,5 kat"}},
+			[]string{"email.body"}},
 		{"numbers match with separators", "5000 TL üzeri harcamaya %10 indirim.",
 			Content{SMS: "5.000 TL üzeri %10 indirim", Email: Email{Subject: "%10", Body: "5000 TL"}}, nil},
 	}

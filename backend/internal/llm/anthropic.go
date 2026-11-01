@@ -22,8 +22,12 @@ type anthropicClient struct {
 	model  string
 }
 
-// callTimeout bounds one model call (one attempt of the repair loop).
-const callTimeout = 2 * time.Minute
+// callIdleTimeout ends a model call whose stream sends nothing for this long;
+// callMaxDuration bounds one call (one attempt of the repair loop) overall.
+const (
+	callIdleTimeout = 60 * time.Second
+	callMaxDuration = 10 * time.Minute
+)
 
 // NewAnthropic returns a Client backed by the Anthropic Messages API. Create
 // one per model (segment and content may use different models).
@@ -40,13 +44,17 @@ func (a *anthropicClient) Name() string { return "anthropic" }
 // returns ErrRefusal; hitting max_tokens returns ErrTruncated.
 func (a *anthropicClient) Complete(ctx context.Context, req Request, onDelta func(string)) (Response, error) {
 	// The SDK sets no request timeout and the HTTP handlers pass the
-	// request context; bound each model call so a stalled stream ends.
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	// request context. A stream that goes quiet for callIdleTimeout is
+	// cancelled; a healthy long stream may run up to callMaxDuration.
+	ctx, cancel := context.WithTimeout(ctx, callMaxDuration)
 	defer cancel()
+	idle := time.AfterFunc(callIdleTimeout, cancel)
+	defer idle.Stop()
 	stream := a.client.Messages.NewStreaming(ctx, buildParams(a.model, req))
 	defer stream.Close()
 	msg := anthropic.Message{}
 	for stream.Next() {
+		idle.Reset(callIdleTimeout)
 		event := stream.Current()
 		if err := msg.Accumulate(event); err != nil {
 			return a.response(&msg), fmt.Errorf("llm: anthropic: accumulate: %w", err)

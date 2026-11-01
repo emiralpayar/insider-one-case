@@ -73,7 +73,8 @@ describe('humanReason queue notes', () => {
       'HTTP 400 Bad Request · önceki deneme ulaşmış olabilir',
     )
     expect(humanReason('worker crashed mid-send')).toBe('Worker gönderim sırasında durdu')
-    expect(humanReason('consent revoked after a possibly delivered attempt')).toBe('İzin gönderimden önce geri çekildi')
+    expect(humanReason('consent revoked after a possibly delivered attempt')).toBe('İzin geri çekildi · önceki deneme ulaşmış olabilir')
+    expect(humanReason('crashed mid-send; consent since revoked')).toBe('Worker gönderim sırasında durdu · izin sonra geri çekildi')
   })
 })
 
