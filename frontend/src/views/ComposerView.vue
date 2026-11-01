@@ -35,7 +35,8 @@ function reachable(s: Step | string): boolean {
     case 'audience':
       return !!c
     case 'content':
-      return !!c?.rule
+      // An empty audience (e.g. an unmapped "VIP" draft) gets no content.
+      return !!c?.rule && preview.value?.total !== 0
     case 'approve':
       return !!c?.rule && !!c?.content
   }
@@ -74,10 +75,11 @@ async function load(id: string) {
       return
     }
     campaign.value = c
-    const q = route.query.step as Step | undefined
-    step.value = q && reachable(q) ? q : defaultStep(c)
     preview.value = null
     if (c.rule) preview.value = await api.preview(c.rule)
+    const q = route.query.step as Step | undefined
+    const want = q && reachable(q) ? q : defaultStep(c)
+    step.value = reachable(want) ? want : 'audience'
   } catch (e) {
     loadError.value = errorText(e)
   }
