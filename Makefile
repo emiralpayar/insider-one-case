@@ -33,6 +33,6 @@ eval:
 
 # Real crash test against the running stack (make up first): SIGKILLs the
 # SMS-leader worker mid-campaign and checks takeover, recovery and that no
-# message was delivered twice. Adds one "Chaos test" campaign.
+# message was delivered twice. Adds a "Chaos test: …" campaign per run.
 chaos:
 	./scripts/chaos.sh

@@ -49,19 +49,18 @@ Sol menülü tek sayfa uygulama: kampanya listesi (kampanya adı + brief, durum 
 ## Mimari
 
 ```
-web (nginx + Vue build)  ──►  api (Go)  ──►  postgres
-                                  ▲              ▲
-                                  │              │
-                           worker (Go, 2 adet) ──┘──► mock-provider (Go)
-                                  │
-                                  └── Claude API (veya açıkça seçilmiş mock LLM)
+web (nginx + Vue build)  ──►  api (Go)  ──►  postgres  ◄──  worker (Go, 2 adet)  ──►  mock-provider (Go)
+                                │
+                                └──►  Claude API (veya açıkça seçilmiş mock LLM)
 ```
+
+api ve worker yalnızca Postgres üzerinden haberleşir: api onayda mesaj satırlarını yazar, worker'lar onları kuyruktan alır. Claude'u yalnızca api çağırır.
 
 Tek Go binary'si alt komutlarla çalışır: `composer api | worker | migrate | seed | healthcheck`. Mock provider ayrı bir binary ve container.
 
 - **Kuyruk = Postgres tablosu.** `messages` satırları `FOR UPDATE SKIP LOCKED` ile alınır, 30 sn'lik kira (`locked_until`) ile tutulur. Onay + kuyruğa alma tek transaction olduğu için dual-write/outbox sorunu yok. Kirası dolan `sending` satırı (worker göndermenin ortasında öldü) başka worker tarafından "belirsiz" olarak geri alınır.
 - **Kanal başına tek lider.** Her kanal için `pg_try_advisory_lock` ile bir lider worker seçilir; hız sınırlayıcı (100/sn, eşit aralıklı, patlama yok; 50 ms güvenlik payıyla ≈95/sn) yalnızca liderde tutulur, gönderimler goroutine havuzuyla paralel yapılır. Lider ölürse DB oturumu kapanır, kilit düşer, diğer replika devralır. Dağıtık sayaç gerekmez.
-- **Idempotency key + belirsiz → `unknown`.** Her istek `Idempotency-Key: <message_id>` taşır. Hatalar "kesin gitmedi" (bağlantı kurulamadı, 429, diğer 4xx) ve "belirsiz" (5xx, timeout) olarak ayrılır. Bağlantı hatası ve 429 tekrar denenir; diğer 4xx tekrar denenmeden `failed` olur. Belirsiz hata, provider idempotency destekliyorsa aynı key ile tekrar denenir; desteklemiyorsa (`PROVIDER_IDEMPOTENCY=false`) mesaj `unknown` olur ve tekrar gönderilmez. 429 deneme hakkından düşmez, kanalı `Retry-After` kadar (en fazla 10 sn) durdurur; bir mesaj 20 kez 429 alırsa `failed` olur ([DECISIONS.md #28](DECISIONS.md)). Tüm `Mark*` güncellemeleri kira token'ı ile çitlenir: kirası düşmüş eski bir kopya yeni sonucun üzerine yazamaz.
+- **Idempotency key + belirsiz → `unknown`.** Her istek `Idempotency-Key: <message_id>` taşır. Hatalar "kesin gitmedi" (bağlantı kurulamadı, 429, diğer 4xx) ve "belirsiz" (5xx, timeout) olarak ayrılır. Bağlantı hatası ve 429 tekrar denenir; diğer 4xx tekrar denenmeden `failed` olur. Belirsiz hata, provider idempotency destekliyorsa aynı key ile tekrar denenir; desteklemiyorsa (`PROVIDER_IDEMPOTENCY=false`) mesaj `unknown` olur ve tekrar gönderilmez. 429 deneme hakkından düşmez, kanalı `Retry-After` kadar (en fazla 10 sn) durdurur; bir mesaj 20 kez 429 alırsa `failed` olur ([DECISIONS.md #28](DECISIONS.md)). Belirsiz bir denemeden sonra mesaj artık "kesin gitmedi" (`failed`, `skipped_no_consent`) olarak bitmez, `unknown` olur ([DECISIONS.md #30](DECISIONS.md)). Tüm `Mark*` güncellemeleri kira token'ı ile çitlenir: kirası düşmüş eski bir kopya yeni sonucun üzerine yazamaz.
 - **İzin iki kez kontrol edilir:** onayda yalnızca izinli kullanıcılar kuyruğa girer; worker iş alırken izni aynı SQL ifadesinde tekrar okur, geri çekilmişse `skipped_no_consent` (çökmeden kurtarılan satırda `unknown`).
 - **DSL → parametreli SQL.** Claude yalnızca izin listesindeki alanlar (`city`, `language`, `abandoned_cart`, `purchased`, `order_count`, `total_spent`, `signed_up`), alana uygun operatörler ve aralık kontrollü değerlerle JSON kural üretebilir. Derleyici değerleri her zaman bind parametresi olarak geçer.
 - **Structured output + doğrulama + en fazla 2 onarım.** Claude çıktısı JSON schema ile kısıtlanır, backend'de katı decode + semantik doğrulamadan geçer; hatalar makine-okunur listeyle Claude'a geri gönderilir (en fazla 2 tur).
@@ -75,7 +74,7 @@ Ayrıntılar ve bedelleri için [DECISIONS.md](DECISIONS.md).
 Claude'un çıktısı hiçbir zaman "güvenilir" kabul edilmez; her katman bir öncekinin kaçırdığını yakalar:
 
 1. **Kısıtlı çıktı alanı.** Claude SQL değil, küçük bir segment DSL'i üretir. Şema alan adlarını ve genel operatör kümesini kısıtlar (alana uygun operatör, değer tipi ve aralık backend doğrulamasında zorlanır); yapılandırılmış çıktı (`output_config.format` JSON schema) ile istenir. İçerik için de kanal bazında şema var (`sms`, `email.subject/preheader/body`).
-2. **Backend doğrulaması.** Çıktı bilinmeyen alanları reddeden katı JSON decode'dan, ardından semantik doğrulamadan geçer: bilinmeyen alan/operatör, aralık dışı gün sayısı, bilinmeyen şehir (Türkçe normalizasyonla: `istanbul` → `İstanbul`), çelişen koşullar, boş koşul listesi (yalnızca `audience: "all"` ya da eşlenemeyen kitle taslağıyla kabul). Model çıktısı ek olarak herkesi seçen yer tutucu koşulları (`order_count gte 0`) ve eşlenemeyen kitlenin `audience: "all"` ile genişletilmesini reddeder. Bir koşul veride tek başına herkesi seçiyorsa ("en fazla 500 sipariş") model çıktısında onarıma döner, elle eklenmişse önizlemede "Etkisiz koşul" uyarısı çıkar ([DECISIONS.md #26](DECISIONS.md)). İçerikte en kötü durum uzunluğu, izin listesi dışı/bozuk değişkenler (`{{phone}}`, `{{first_name`) ve değişkene yapışık ekler (`{{city}}'daki`: değer bilinmediği için ünlü uyumu tutmaz) kontrol edilir. Model içeriği ayrıca brief'te geçmeyen vaatler (stok, kargo/teslimat, garanti, iade, hediye, süre sınırı) ve brief'tekinden farklı sayılar ("%30" yerine "%50") için taranır; bulunursa onarıma döner ([DECISIONS.md #24](DECISIONS.md)).
+2. **Backend doğrulaması.** Çıktı bilinmeyen alanları reddeden katı JSON decode'dan, ardından semantik doğrulamadan geçer: bilinmeyen alan/operatör, aralık dışı gün sayısı, bilinmeyen şehir (Türkçe normalizasyonla: `istanbul` → `İstanbul`), çelişen koşullar, boş koşul listesi (yalnızca `audience: "all"` ya da eşlenemeyen kitle taslağıyla kabul). Model çıktısı ek olarak herkesi seçen yer tutucu koşulları (`order_count gte 0`) ve eşlenemeyen kitlenin `audience: "all"` ile genişletilmesini reddeder. Bir koşul veride tek başına herkesi seçiyorsa ("en fazla 500 sipariş") model çıktısında onarıma döner, elle eklenmişse önizlemede "Etkisiz koşul" uyarısı çıkar ([DECISIONS.md #26](DECISIONS.md)). İçerikte en kötü durum uzunluğu (SMS 160, konu 80, e-posta gövdesi 20.000, ön başlık 200 karakter), izin listesi dışı/bozuk değişkenler (`{{phone}}`, `{{first_name`, tek parantezli `{first_name}`) ve değişkene yapışık ekler (`{{city}}'daki`: değer bilinmediği için ünlü uyumu tutmaz) kontrol edilir. Model içeriği ayrıca brief'te geçmeyen vaatler (stok, kargo/teslimat, garanti, iade, hediye, süre sınırı) ve brief'tekinden farklı sayılar ("%30" yerine "%50") için taranır; bulunursa onarıma döner ([DECISIONS.md #24](DECISIONS.md)).
 3. **Onarım döngüsü.** Doğrulama hataları kod + alan + mesaj listesi olarak ("SMS en kötü durumda 174 karakter, 160'a indir") Claude'a geri gönderilir; en fazla 2 onarım. Sonra hata kullanıcıya gösterilir ve form ile elle düzenleme mümkündür. Refusal, `max_tokens` ile kesilmiş çıktı ve transport hataları onarılmaya çalışılmaz; loglanıp hata olarak döner.
 4. **Prompt injection.** Brief, düzeltme talimatı ve mevcut kural etiketli bloklar içinde "güvenilmeyen veri" olarak verilir. Asıl garanti promptta değil doğrulamada: brief ne derse desin çalışan şey yalnızca izin listesindeki koşullardır (`DROP TABLE` içeren alan/değerler testlerde reddediliyor).
 5. **Sessiz hata yok.** Brief'in kitleye karşılık gelmeyen kısımları (`"VIP"`, `"genç kullanıcılar"`) `unmapped` olarak döner ve arayüzde uyarı olur. Kitlenin tamamı eşlenemezse kural boş kalır (kimseyle eşleşmez) ve pazarlamacı koşulu elle ekler; çok geniş kitle ek onay ister.
@@ -100,14 +99,17 @@ Vaat kontrolü eklenmeden önceki prompt'la aynı set 12/14 geçerli içerik ver
 ## Testler
 
 ```bash
-make test     # test Postgres'i (docker-compose.test.yml, port 55432) kaldırır, Go + frontend testlerini çalıştırır
+make test     # test Postgres'i (docker-compose.test.yml, port 55432) kaldırır; CI ile aynı: go vet (eval/live etiketli dosyalar dahil), go test -race, frontend testleri ve tip kontrollü build
 ```
 
 Testler gerçek Postgres kullanır (her test kendi veritabanını açar), gerçek API key gerektirmez. Öne çıkanlar:
 
 | Test | Ne kanıtlar |
 |---|---|
-| `queue.TestEndToEndExactlyOncePerRecipient` | İki worker, mock provider %10 5xx + %5 429 + %5 kayıp cevap modunda: her alıcıya tam bir teslimat (`max_deliveries_per_recipient_message == 1`), `sent` satırları provider teslimatlarına eşit. |
+| `queue.TestEndToEndExactlyOncePerRecipient` | İki worker, mock provider %10 5xx + %5 429 + %5 kayıp cevap modunda: her alıcıya tam bir teslimat, `sent` satırları provider teslimatlarına eşit. Idempotent provider tekrarları zaten bastırdığı için asıl kontrol mock'un dedektörleri: aynı mesaj hiç aynı anda iki istekte değil (`concurrent_same_key == 0`), başarılı cevaptan sonra tekrar gönderilmedi (`resent_after_ack == 0`). Lider kilidi ve `SKIP LOCKED` kaldırılınca test kırılıyor. |
+| `queue.TestEndToEndNonIdempotentAtMostOnce` | Aynı yük idempotency olmadan: hiçbir mesaj iki kez teslim edilmez, teslimat `sent` ile `sent + unknown` arasında. |
+| `queue.TestClaimSkipsRowsLockedByAnotherClaim` | Başka bir transaction'ın kilitlediği satırlar ne bekletir ne de ikinci kez alınır (deterministik `SKIP LOCKED` testi). |
+| `queue.TestMaybeDeliveredNeverBecomesFailedOrSkipped`, `TestStopReleasesClaimedJobs`, `TestNoSendWithLeaseNearlyExpired`, `TestRecoveredExhaustedIsUnknown` | Belirsiz denemeden sonra mesaj `failed`/`skipped` olmaz, `unknown` olur; kapanışta alınmış işler kuyruğa geri bırakılır; kirası bitmek üzere olan iş gönderilmez; deneme hakkı bitmiş kurtarılan satır tekrar gönderilmez. |
 | `queue.TestRateLimitAcrossWorkers` | Üç worker aynı kanalda: provider herhangi bir 1 sn penceresinde 100'den fazla istek görmez. |
 | `queue.TestExpiredLock*`, `TestUncertain*`, `TestNotSentExhaustedIsFailed` | Çökme kurtarma (veritabanında simüle; gerçek kill için `make chaos`) ve hata sınıflandırması: idempotent modda aynı key ile tekrar, değilse `unknown`; kesin gitmeyen hata tükenirse `failed`. |
 | `queue.TestStaleLeaseMarkIsNoop`, `TestRevokedConsentSkipped` | Kira çitleme; izin onaydan sonra geri çekilirse mesaj gitmez. |
@@ -122,10 +124,10 @@ Testler gerçek Postgres kullanır (her test kendi veritabanını açar), gerçe
 | `content.TestValidatePlaceholderSuffix` | `{{city}}'daki` gibi yapışık ekler reddedilir. |
 | `content.TestUnrequestedClaims`, `llm.TestContentRepairsUnrequestedClaim` | Brief'te olmayan vaat ("stoklar tükenmeden") ya da sayı (brief %30, metin %50) model çıktısında onarıma döner; brief izin veriyorsa ("kargo bedava" → "ücretsiz kargo", "5000" → "5.000") geçer. |
 | `segment.TestIneffectiveConditions`, `llm.TestSegmentRuleCheckRepairs` | Veride herkesi seçen koşul önizlemede uyarı olur, model çıktısında onarıma döner. |
-| `campaign.TestApproveDuplicateNeedsConfirm`, `api.TestDuplicateSendNeedsConfirm` | Aynı brief ya da aynı metin aynı kişilere ikinci kampanyayla gidecekse onay teyit ister; ilgisiz kampanya uyarı vermez. |
+| `campaign.TestApproveDuplicateNeedsConfirm`, `api.TestDuplicateSendNeedsConfirm`, `campaign.TestDuplicateWindowStatusAndLLMFallback`, `campaign.TestConcurrentDuplicateApprovalsSerialized` | Aynı brief ya da aynı metin aynı kişilere ikinci kampanyayla gidecekse onay teyit ister; ilgisiz kampanya, 30 günden eski kampanya ve kesin gitmemiş (`failed`, `skipped_no_consent`) mesajlar uyarı vermez; aynı anda verilen iki onaydan biri teyit ister. |
 | `campaign.TestDuplicateSimilarityCheck`, `api.TestDuplicateLLMCheck`, `llm.TestSimilar*` | LLM benzerlik kontrolü (mock ile): yalnızca kitlesi kesişen kampanyalar sorulur, uyarıda gerekçe var; LLM hata verirse kesin kontrol devam eder ve onay engellenmez; geçersiz model çıktısı onarılır. |
 | `queue.TestRateLimitedGivesUp` | Sürekli 429 dönen provider'da mesaj sonsuza kadar beklemez: sınırda `failed`, deneme sayısı 0. |
-| Frontend (Vitest, 98 test) | GSM-7/UCS-2 parça hesabı, kısmi JSON ayrıştırma, SSE okuyucu, kural yardımcıları, değişken etiketi ↔ metin dönüşümü, gönderim günlüğü biçimlendirme, kampanya adı türetme, önizleme seçimi, durum etiketleri ve filtreler. |
+| Frontend (Vitest, 99 test) | GSM-7/UCS-2 parça hesabı, kısmi JSON ayrıştırma, SSE okuyucu, kural yardımcıları, değişken etiketi ↔ metin dönüşümü, gönderim günlüğü biçimlendirme, kampanya adı türetme, önizleme seçimi, durum etiketleri ve filtreler. |
 
 Gerçek Claude ile (key `.env`'de olmalı, `make test`'e dahil değil):
 
@@ -143,18 +145,24 @@ cd backend && ANTHROPIC_API_KEY=... go test ./internal/llm -run TestAnthropicSmo
 2. ~400 mesaj gittikten sonra SMS kanalının lider worker'ını `docker kill -s KILL` ile öldürür. Düzgün kapanış yoktur; elindeki istekler yarıda kesilir.
 3. O an worker'ın elinde `sending` durumunda kalan mesajları ve bunlardan provider'a ulaşmış ama sonucu kaydedilememiş olanları not eder.
 4. Hepsi sonuçlanana kadar bekler, sonra öldürülen worker'ı tekrar başlatır.
-5. Kontroller: takılı mesaj yok, kalan worker liderliği devraldı, alıcı başına en fazla 1 teslimat, provider teslim sayısı idempotent modda veritabanındaki `sent` sayısına eşit (idempotency yokken `sent ≤ teslim ≤ sent + unknown`), yarım kalanların hepsi sonuçlandı ve provider'a ulaşmış olanlar ikinci kez teslim edilmedi.
+5. Kontroller:
+   - takılı mesaj yok,
+   - kalan worker SMS liderliğini kill'den **sonra** aldı (lider, container'ın son başlangıcından beri loglara bakılarak bulunur; öldürülmüş worker'ın eski "acquired" satırı yanıltmaz),
+   - aynı mesaj hiçbir an iki istekte değil (`concurrent_same_key = 0`),
+   - yarım kalanların hepsi sonuçlandı,
+   - **idempotent modda:** provider tekrarları bastırdığı için teslim sayaçları kuyruğu test edemez. Bu yüzden başarılı cevaptan sonra tekrar gönderim (`resent_after_ack`) yalnızca öldürülen worker'ın provider'a ulaşmış mesajlarıyla sınırlı mı, ona bakılır. Ayrıca provider teslim sayısı = `sent`.
+   - **idempotency yokken:** alıcı başına en fazla 1 teslimat, `sent ≤ teslim ≤ sent + unknown`, yarım kalanların hepsi `unknown` ve provider'a ulaşmış olanlar ikinci kez teslim edilmedi.
 
-Sonuçlar (2026-11-01, iki worker):
+Sonuçlar (2026-11-02, iki worker; betik art arda çalıştırılabilir):
 
 | Mod | Yarım kalan | Provider'a ulaşmış | Sonuç |
 |---|---|---|---|
-| Idempotent provider (varsayılan) | 19 | 2 | 19'u `sent`; ulaşmış 2'si provider'da tek teslimat (aynı Idempotency-Key ile tekrar → `duplicate`). 8.278 `sent` = 8.278 teslimat. |
-| Idempotency yok (`PROVIDER_IDEMPOTENCY=false MOCK_IDEMPOTENCY=false docker compose up -d worker mock-provider`) | 33 | 10 | 33'ü de `unknown`, hiçbiri tekrar gönderilmedi; ulaşmış 10'u tek teslimat. |
+| Idempotent provider (varsayılan) | 34 / 27 (iki koşu) | 2 / 2 | Hepsi `sent`; `concurrent_same_key = 0`, `resent_after_ack = 0`; 8.278 `sent` = 8.278 teslimat. İkinci koşu, ilk koşuda yeniden başlatılan worker'ı değil o anki lideri öldürdü. |
+| Idempotency yok (`PROVIDER_IDEMPOTENCY=false MOCK_IDEMPOTENCY=false docker compose up -d worker mock-provider`) | 30 | 6 | 30'u da `unknown`, hiçbiri tekrar gönderilmedi; ulaşmış 6'sı tek teslimat; alıcı başına en fazla 1 teslimat. |
 
-Kampanya listesine "Chaos test" adlı bir kampanya ekler. Kira süresi 30 sn olduğu için yarım kalan mesajlar ~30 sn sonra kurtarılır.
+Her koşu kampanya listesine "Chaos test: …" adlı bir kampanya ekler. Kira süresi 30 sn olduğu için yarım kalan mesajlar ~30 sn sonra kurtarılır.
 
-CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race`, frontend test + build).
+CI: `.github/workflows/ci.yml` (Postgres service container, `go vet` (eval/live dahil), `go test ./... -race`, frontend test + build); `make test` aynı adımları çalıştırır.
 
 ## Gözlemlenebilirlik
 
@@ -163,7 +171,7 @@ CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race
 - `GET /api/config`: `{llm_provider, llm_configured, models}` — arayüzdeki bantlar buradan.
 - `GET /api/campaigns/{id}/status`: durum başına sayılar, kanal kırılımı, 10 sn'lik hız, son 50 hatalı mesaj.
 - `GET /api/campaigns/{id}/messages?status=failed,unknown&channel=sms&page=2`: alıcı bazında mesaj listesi (ad, kanal, durum, deneme, son hata, gönderim zamanı), sayfa başına 50 + toplam.
-- `GET /api/campaigns/{id}/duplicates`: son 30 günde bu kitleden kişilere aynı brief/metinle (ve `DUPLICATE_LLM_CHECK=true` ise Claude'a göre benzer amaçla) giden kampanyalar; her biri için `match` (`text`/`brief`/`similar`), `reason`, kişi sayısı ve `similarity_check` (`off`/`ok`/`error`).
+- `GET /api/campaigns/{id}/duplicates`: son 30 günde bu kitleden kişilere aynı brief/metinle (ve `DUPLICATE_LLM_CHECK=true` ise Claude'a göre benzer amaçla) giden kampanyalar (`duplicates`: her biri için `match` (`text`/`brief`/`similar`), `reason`, kişi sayısı) ve yanıt düzeyinde `similarity_check` (`off`/`ok`/`error`).
 - `POST /api/segments/members` (`{rule, page, search}`): kuralın kitlesindeki kişiler, sayfa başına 50 + toplam; kural preview ile aynı şekilde doğrulanıp parametreli SQL'e derlenir.
 - `PUT /api/campaigns/{id}/name` (`{name}`): kampanya adını değiştirir (boş olamaz, en fazla 120 karakter; onaydan sonra da).
 - `llm_calls` tablosu: her Claude çağrısının girdisi, ham çıktısı ve doğrulama hataları.
@@ -185,7 +193,7 @@ CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race
 | `MOCK_IDEMPOTENCY` | true | `false`: aynı `Idempotency-Key` tekrar teslim edilir |
 | `PROVIDER_IDEMPOTENCY` (worker) | true | Worker'ın provider'ın idempotency desteğine güvenip güvenmediği; `false` iken belirsiz hatalar `unknown` olur |
 
-`GET /v1/stats` → `accepted`, `delivered`, `duplicates_suppressed`, `max_deliveries_per_recipient_message` (aynı alıcıya aynı mesaj kaç kez teslim edildi; 1 olmalı). `GET /v1/messages/{key}` provider tarafındaki durum.
+`GET /v1/stats` → `accepted`, `delivered`, `duplicates_suppressed`, `max_deliveries_per_recipient_message` (aynı alıcıya aynı mesaj kaç kez teslim edildi; 1 olmalı; idempotency açıkken tanım gereği en fazla 1), `concurrent_same_key` (aynı anahtarla aynı anda gelen istek; 0 olmalı) ve `resent_after_ack` (başarılı cevap verilmiş anahtar için yeni istek; yalnızca cevabı kaybolan bir istekten sonra beklenir). `GET /v1/messages/{key}` provider tarafındaki durum.
 
 ## Kapsam dışı / yapılmayanlar
 
@@ -202,25 +210,29 @@ CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race
 - **Efektif tavan ≈95 msg/sn/kanal:** limiter 50 ms güvenlik payı tutar ki provider tarafındaki her 1 sn penceresinde 100 aşılmasın.
 - **Liderlik devrinde kısa çakışma:** lider kilit bağlantısını kaybederse, eski liderin uçuştaki (en fazla eşzamanlılık kadar, her biri 5 sn timeout'lu) istekleri yeni liderin ilk istekleriyle çakışabilir; provider'ın 429'u yedek koruma.
 - **İzin iş alma anında okunur:** izin, mesajı kuyruktan alan sorguda okunur; normalde gönderimden 1 sn'den kısa süre önce, provider'ın Retry-After duraklaması sırasında ise ~10 sn'ye kadar önce. Bu aralıkta izin geri çekilirse o mesaj yine gider.
+- **Onayda içerik sürümü kontrol edilmez:** onay, o anda kayıtlı içeriği gönderir. Önizleme açıkken başka bir sekmede içerik değiştirilirse, pazarlamacının ekranda görmediği son hali gider. Çözüm (onay isteğinde içeriğin sürümünü göndermek, `FOR UPDATE` altında karşılaştırmak) küçük ama arayüzde "içerik değişti, yeniden gözden geçirin" akışı gerektiriyor.
+- **LLM benzerlik sonucu sunucuda zorlanmaz:** `DUPLICATE_LLM_CHECK` açıkken "benzer amaçlı" eşleşmelerin teyidi yalnızca arayüzde istenir; API'yi doğrudan çağıran biri bunu atlayabilir. Kesin eşleşmeler (aynı brief, aynı metin) sunucuda zorlanır ([DECISIONS.md #29](DECISIONS.md)).
 - **Preheader mesaj başına saklanmaz:** `messages` satırında konu ve gövde render edilip saklanır; preheader kampanya içeriğinde kalır ve provider'a gönderilmez.
 
 ## Repo yapısı
 
 ```
 backend/
-  cmd/composer/        api | worker | migrate | seed alt komutları
+  cmd/composer/        api | worker | migrate | seed | healthcheck alt komutları
   cmd/mockprovider/    mock SMS/email provider
   internal/
     api/               HTTP API, SSE içerik stream'i, health/config
-    campaign/          kampanya store'u, onay (tek tx), durum raporu
+    campaign/          kampanya store'u, onay (tek tx), durum raporu, tekrar gönderim kontrolü, alıcı listesi, kampanya adı
     content/           render, en kötü durum uzunluğu, GSM-7/UCS-2, içerik doğrulama
-    segment/           DSL, doğrulama, parametreli SQL derleyici, preview
-    llm/               LLM interface, Anthropic + mock, onarım döngüsü, kısmi JSON, llm_calls
+    segment/           DSL, doğrulama, parametreli SQL derleyici, preview, kitle listesi, etkisiz koşul kontrolü
+    llm/               llm.Client, Anthropic + mock, onarım döngüsü, kısmi JSON, benzerlik kontrolü, llm_calls
     queue/             claim (SKIP LOCKED), lider/limiter, dispatcher, hata sınıflandırma, backoff
     mockprovider/      provider sunucusu (idempotency + hata enjeksiyonu)
     seed/              deterministik sahte kullanıcı ve event'ler
     db/, dbtest/, metrics/, verr/, geo/
 frontend/              Vue 3 + TS + Vite; nginx.conf (SPA + /api proxy)
+scripts/chaos.sh       make chaos (gerçek SIGKILL testi)
+.github/workflows/     CI
 docs/                  case brief, tasarım dokümanı, uygulama planı
 ai-sessions/           Claude Code oturum export'ları
 docker-compose.yml     tüm sistem · docker-compose.test.yml: test Postgres'i
