@@ -66,6 +66,9 @@ func toAPIError(err error) *apiError {
 	case errors.Is(err, campaign.ErrLargeAudienceNotConfirmed):
 		return &apiError{Status: http.StatusUnprocessableEntity, Code: "large_audience_not_confirmed",
 			Message: "Kitle tüm kullanıcıların %50'sinden fazla; geniş kitle onayı gerekli"}
+	case errors.Is(err, campaign.ErrDuplicateNotConfirmed):
+		return &apiError{Status: http.StatusUnprocessableEntity, Code: "duplicate_not_confirmed",
+			Message: "Bu metin son 30 günde başka bir kampanyayla aynı kişilere gönderildi; tekrar gönderim onayı gerekli"}
 	case errors.Is(err, campaign.ErrEmptyAudience):
 		return &apiError{Status: http.StatusUnprocessableEntity, Code: "empty_audience", Message: "Kitle boş"}
 	}

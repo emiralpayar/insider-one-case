@@ -103,6 +103,7 @@ func New(cfg Config) *Server {
 			r.Get("/content/stream", s.contentStream)
 			r.Put("/content", s.putContent)
 			r.Put("/channels", s.putChannels)
+			r.Get("/duplicates", s.duplicates)
 			r.Post("/approve", s.approve)
 			r.Get("/status", s.status)
 			r.Get("/messages", s.listMessages)

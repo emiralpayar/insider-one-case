@@ -573,3 +573,41 @@ func TestContentStreamHeartbeat(t *testing.T) {
 		t.Fatalf("stream body: %s", body)
 	}
 }
+
+// Same brief twice with the deterministic mock gives the same text to the
+// same people: the second approval needs confirm_duplicate.
+func TestDuplicateSendNeedsConfirm(t *testing.T) {
+	pool := seeded(t)
+	srv := newServer(t, pool, mockComposer(pool), "mock")
+	ready := func() string {
+		id := createCampaign(t, srv)
+		if r := do(t, srv, "POST", "/api/campaigns/"+id+"/segment/generate", nil); r.Code != 200 {
+			t.Fatalf("generate: %d %s", r.Code, r.Body)
+		}
+		if evs, _ := stream(t, srv, "/api/campaigns/"+id+"/content/stream"); evs[len(evs)-1].Type != "done" {
+			t.Fatalf("content: %+v", evs[len(evs)-1])
+		}
+		return id
+	}
+	first, second := ready(), ready()
+	if r := do(t, srv, "POST", "/api/campaigns/"+first+"/approve", map[string]bool{}); r.Code != 200 {
+		t.Fatalf("approve first: %d %s", r.Code, r.Body)
+	}
+	var d struct {
+		Duplicates []struct {
+			CampaignID string `json:"campaign_id"`
+			Recipients int    `json:"recipients"`
+		} `json:"duplicates"`
+	}
+	do(t, srv, "GET", "/api/campaigns/"+second+"/duplicates", nil).decode(t, &d)
+	if len(d.Duplicates) == 0 || d.Duplicates[0].CampaignID != first || d.Duplicates[0].Recipients == 0 {
+		t.Fatalf("duplicates = %+v", d)
+	}
+	r := do(t, srv, "POST", "/api/campaigns/"+second+"/approve", map[string]bool{})
+	if r.Code != http.StatusUnprocessableEntity || r.errCode(t) != "duplicate_not_confirmed" {
+		t.Fatalf("approve second: %d %s", r.Code, r.Body)
+	}
+	if r := do(t, srv, "POST", "/api/campaigns/"+second+"/approve", map[string]bool{"confirm_duplicate": true}); r.Code != 200 {
+		t.Fatalf("approve second confirmed: %d %s", r.Code, r.Body)
+	}
+}

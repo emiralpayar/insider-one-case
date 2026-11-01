@@ -162,6 +162,27 @@ func smsStats(c content.Content, wc content.WorstCase) content.SMSStats {
 	}))
 }
 
+// duplicates lists earlier campaigns that already sent this campaign's text
+// to people in its audience (shown before approval).
+func (s *Server) duplicates(w http.ResponseWriter, r *http.Request) {
+	id, err := campaignID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	c, err := s.store.Get(r.Context(), id)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	d, err := campaign.DuplicateSends(r.Context(), s.pool, c)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"duplicates": d})
+}
+
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	id, err := campaignID(r)
 	if err != nil {

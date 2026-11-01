@@ -308,7 +308,8 @@ func TestApproveSmallPoolNoDeadlock(t *testing.T) {
 	for _, id := range targets {
 		go func() {
 			<-start
-			_, err := campaign.Approve(tctx, small, id, campaign.ApproveRequest{})
+			// Same text on purpose: this test is about the pool, not duplicates.
+			_, err := campaign.Approve(tctx, small, id, campaign.ApproveRequest{ConfirmDuplicate: true})
 			results <- result{id, err}
 		}()
 	}

@@ -8,7 +8,7 @@ import { errorText } from '../lib/errors'
 import { num, pct } from '../lib/format'
 import { WORST_CASE_FIRST_NAME, describeRule, worstCaseCity } from '../lib/rule'
 import { render, smsStats } from '../lib/sms'
-import type { Campaign, Channel, PreviewResult } from '../types'
+import type { Campaign, Channel, DuplicateSend, PreviewResult } from '../types'
 import Icon from './Icon.vue'
 import MessagePreview from './MessagePreview.vue'
 import WarningList from './WarningList.vue'
@@ -18,6 +18,17 @@ const emit = defineEmits<{ campaign: [c: Campaign]; preview: [p: PreviewResult];
 const router = useRouter()
 
 const confirmLarge = ref(false)
+const confirmDuplicate = ref(false)
+const duplicates = ref<DuplicateSend[]>([])
+
+// Earlier campaigns that already sent this exact text to people in this audience.
+async function loadDuplicates() {
+  try {
+    duplicates.value = (await api.duplicates(props.campaign.id)).duplicates
+  } catch {
+    duplicates.value = [] // the server re-checks on approve anyway
+  }
+}
 const approving = ref(false)
 const approveError = ref<unknown>(null)
 const channelBusy = ref(false)
@@ -25,6 +36,7 @@ const channelError = ref<unknown>(null)
 const refreshing = ref(true)
 
 onMounted(async () => {
+  void loadDuplicates()
   // Re-count right before approval: the data may have changed since the audience step.
   try {
     if (props.campaign.rule) emit('preview', await api.preview(props.campaign.rule))
@@ -39,6 +51,10 @@ const pv = computed(() => props.preview)
 const enabled = (ch: Channel) => props.campaign.channels.includes(ch)
 const isLarge = computed(() => !!pv.value?.warnings.some((w) => w.code === 'large_audience'))
 const isEmpty = computed(() => !!pv.value?.warnings.some((w) => w.code === 'empty_audience'))
+
+const shownDuplicates = computed(() => duplicates.value.filter((d) => enabled(d.channel)))
+const CH_LABEL: Record<Channel, string> = { sms: 'SMS', email: 'e-posta' }
+const fmtDate = (s: string) => new Date(s).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long' })
 
 const missingContent = computed(() => {
   const c = props.campaign.content
@@ -65,6 +81,7 @@ const blockReason = computed(() => {
   if (recipients.value === 0) return 'Seçili kanallarda izni olan alıcı yok — onay verilemez.'
   if (missingContent.value.length) return 'Açık bir kanalın içeriği yok.'
   if (isLarge.value && !confirmLarge.value) return 'Geniş kitle onay kutusunu işaretleyin.'
+  if (shownDuplicates.value.length && !confirmDuplicate.value) return 'Tekrar gönderim onay kutusunu işaretleyin.'
   return ''
 })
 
@@ -74,6 +91,7 @@ async function toggle(ch: Channel, on: boolean) {
   channelError.value = null
   try {
     emit('campaign', await api.putChannels(props.campaign.id, next))
+    void loadDuplicates()
   } catch (e) {
     channelError.value = e
   } finally {
@@ -86,13 +104,14 @@ async function approve() {
   approving.value = true
   approveError.value = null
   try {
-    await api.approve(props.campaign.id, confirmLarge.value)
+    await api.approve(props.campaign.id, confirmLarge.value, confirmDuplicate.value)
     router.push(`/campaigns/${props.campaign.id}`)
   } catch (e) {
     if (e instanceof ApiError && (e.code === 'already_approved' || e.code === 'campaign_locked')) {
       router.push(`/campaigns/${props.campaign.id}`)
       return
     }
+    if (e instanceof ApiError && e.code === 'duplicate_not_confirmed') void loadDuplicates()
     approveError.value = e
   } finally {
     approving.value = false
@@ -218,6 +237,21 @@ async function approve() {
           Bu kampanya tüm kullanıcıların yarısından fazlasına ({{ num(pv?.total ?? 0) }} / {{ num(pv?.all_users ?? 0) }}) gidecek.
         </span>
       </label>
+      <div v-if="shownDuplicates.length" class="checkbox large-confirm dup-confirm">
+        <div>
+          <strong>Bu kitledeki kişiler bu kampanyayı zaten almış olabilir.</strong>
+          <ul>
+            <li v-for="d in shownDuplicates" :key="d.campaign_id + d.channel">
+              <RouterLink :to="`/campaigns/${d.campaign_id}`">{{ d.name || 'İsimsiz kampanya' }}</RouterLink>
+              ({{ fmtDate(d.approved_at) }}): {{ d.same_text ? `aynı ${CH_LABEL[d.channel]} metni` : `aynı brief'le üretilmiş ${CH_LABEL[d.channel]}` }} bu kitleden {{ num(d.recipients) }} kişiye gitti.
+            </li>
+          </ul>
+          <label class="row" style="gap: 8px; margin-top: 6px">
+            <input v-model="confirmDuplicate" type="checkbox" />
+            <span>Aynı kişilere tekrar göndermeyi onaylıyorum.</span>
+          </label>
+        </div>
+      </div>
       <div v-if="approveError" class="alert alert-danger">
         <span class="alert-icon">!</span>
         <div class="alert-body">
@@ -255,5 +289,6 @@ async function approve() {
 .stat-accent { border-color: var(--success-border); background: linear-gradient(180deg, #fff, var(--success-soft)); }
 .approve-box { border: 1px solid var(--accent-border); box-shadow: var(--shadow-md); background: linear-gradient(180deg, #fff, #fafaff); }
 .approve-box.blocked { border-color: var(--danger-border); background: linear-gradient(180deg, #fff, #fffafa); }
+.dup-confirm ul { margin: 6px 0 0 18px; padding: 0; }
 .large-confirm { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text); }
 </style>

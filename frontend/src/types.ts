@@ -222,3 +222,14 @@ export interface ApiErrorBody {
   message: string
   details?: unknown
 }
+
+/** An earlier campaign that already sent the same text to part of this audience. */
+export interface DuplicateSend {
+  campaign_id: string
+  name: string
+  channel: Channel
+  recipients: number
+  approved_at: string
+  /** true: identical text on this channel; false: only the brief matched. */
+  same_text: boolean
+}

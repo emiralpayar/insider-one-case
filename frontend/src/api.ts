@@ -1,7 +1,7 @@
 // HTTP client for the composer API (backend/internal/api).
 import { SSEParser } from './lib/sse'
 import type {
-  AppConfig, ApproveResult, Campaign, Channel, DoneEvent, MemberPage, MessagePage, PartialContent, PreviewResult,
+  AppConfig, ApproveResult, DuplicateSend, Campaign, Channel, DoneEvent, MemberPage, MessagePage, PartialContent, PreviewResult,
   PutContentResponse, Rule, RuleResponse, StatusReport, VError, Content, ApiErrorBody,
 } from './types'
 
@@ -64,8 +64,9 @@ export const api = {
     req<MemberPage>('POST', '/segments/members', { rule, page, search }),
   putContent: (id: string, content: Content) => req<PutContentResponse>('PUT', c(id) + '/content', { content }),
   putChannels: (id: string, channels: Channel[]) => req<Campaign>('PUT', c(id) + '/channels', { channels }),
-  approve: (id: string, confirmLargeAudience: boolean) =>
-    req<ApproveResult>('POST', c(id) + '/approve', { confirm_large_audience: confirmLargeAudience }),
+  approve: (id: string, confirmLargeAudience: boolean, confirmDuplicate = false) =>
+    req<ApproveResult>('POST', c(id) + '/approve', { confirm_large_audience: confirmLargeAudience, confirm_duplicate: confirmDuplicate }),
+  duplicates: (id: string) => req<{ duplicates: DuplicateSend[] }>('GET', c(id) + '/duplicates'),
   status: (id: string) => req<StatusReport>('GET', c(id) + '/status'),
   /** query: built by lib/lists messagesQuery ("?status=…&channel=…&page=…" or ""). */
   messages: (id: string, query: string) => req<MessagePage>('GET', c(id) + '/messages' + query),

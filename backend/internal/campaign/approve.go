@@ -30,6 +30,9 @@ const insertBatch = 500
 // ApproveRequest is the approval input.
 type ApproveRequest struct {
 	ConfirmLargeAudience bool `json:"confirm_large_audience"`
+	// ConfirmDuplicate acknowledges that some recipients already got the
+	// same text from another recent campaign (see DuplicateSends).
+	ConfirmDuplicate bool `json:"confirm_duplicate"`
 }
 
 // ApproveResult reports how many messages were queued per enabled channel.
@@ -90,6 +93,19 @@ func Approve(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, req ApproveR
 			return ApproveResult{}, ErrEmptyAudience
 		case w.Code == "large_audience" && !req.ConfirmLargeAudience:
 			return ApproveResult{}, ErrLargeAudienceNotConfirmed
+		}
+	}
+	if !req.ConfirmDuplicate {
+		ids := make([]int64, len(users))
+		for i, u := range users {
+			ids[i] = u.id
+		}
+		dups, err := duplicateSends(ctx, tx, c, ids)
+		if err != nil {
+			return ApproveResult{}, err
+		}
+		if len(dups) > 0 {
+			return ApproveResult{}, ErrDuplicateNotConfirmed
 		}
 	}
 	res := ApproveResult{Enqueued: map[string]int{}}
