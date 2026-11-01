@@ -267,8 +267,22 @@ func (d *Dispatcher) process(leadCtx context.Context, j Job) {
 	// HasConsent was read from users in the same statement that claimed the
 	// job, i.e. immediately before sending (plus at most the token wait).
 	if !j.HasConsent {
+		if j.MaybeDelivered {
+			// An earlier uncertain attempt may have reached the user.
+			mark("unknown", d.Store.MarkUnknown(ctx, j, "consent revoked after a possibly delivered attempt"))
+			return
+		}
 		mark("skipped_no_consent", d.Store.MarkSkipped(ctx, j))
 		return
+	}
+	// giveUp ends a message that is certainly not sent by this attempt: failed,
+	// unless an earlier uncertain attempt may have delivered it (DECISIONS #30).
+	giveUp := func(failed func() error, detail string) {
+		if j.MaybeDelivered {
+			mark("unknown", d.Store.MarkUnknown(ctx, j, detail+"; an earlier attempt may have been delivered"))
+			return
+		}
+		mark("failed", failed())
 	}
 
 	if err := d.Limiter.Wait(leadCtx); err != nil {
@@ -302,15 +316,16 @@ func (d *Dispatcher) process(leadCtx context.Context, j Job) {
 		d.Limiter.Pause(ra)
 		d.Metrics.RateLimitedInc(d.Channel)
 		if j.RateLimited+1 >= d.MaxRateLimited {
-			mark("failed", d.Store.MarkRateLimitedOut(ctx, j, fmt.Sprintf("%s; gave up after %d rate-limited answers", res.Detail, j.RateLimited+1)))
+			why := fmt.Sprintf("%s; gave up after %d rate-limited answers", res.Detail, j.RateLimited+1)
+			giveUp(func() error { return d.Store.MarkRateLimitedOut(ctx, j, why) }, why)
 			return
 		}
 		mark("rate_limited", d.Store.MarkRateLimited(ctx, j, now.Add(ra), res.Detail))
 	case OutcomePermanent:
-		mark("failed", d.Store.MarkFailed(ctx, j, res.Detail))
+		giveUp(func() error { return d.Store.MarkFailed(ctx, j, res.Detail) }, res.Detail)
 	case OutcomeNotSent:
 		if j.Attempts >= d.MaxAttempts {
-			mark("failed", d.Store.MarkFailed(ctx, j, res.Detail))
+			giveUp(func() error { return d.Store.MarkFailed(ctx, j, res.Detail) }, res.Detail)
 		} else {
 			mark("retry", d.Store.MarkRetry(ctx, j, now.Add(d.backoff(j.Attempts)), false, res.Detail))
 		}
@@ -322,7 +337,7 @@ func (d *Dispatcher) process(leadCtx context.Context, j Job) {
 			mark("unknown", d.Store.MarkUnknown(ctx, j, res.Detail))
 		default:
 			// Safe: the resend carries the same Idempotency-Key.
-			mark("retry", d.Store.MarkRetry(ctx, j, now.Add(d.backoff(j.Attempts)), false, res.Detail))
+			mark("retry", d.Store.MarkUncertainRetry(ctx, j, now.Add(d.backoff(j.Attempts)), res.Detail))
 		}
 	}
 }

@@ -25,6 +25,9 @@ type Job struct {
 	// Recovered: the row was 'sending' with an expired lease, i.e. a worker
 	// died mid-send and the earlier attempt's outcome is unknown.
 	Recovered bool
+	// MaybeDelivered: some earlier attempt had an uncertain outcome (or this
+	// is a recovered row), so the provider may already have delivered it.
+	MaybeDelivered bool
 	// HasConsent is the user's consent for Channel as read at claim time.
 	HasConsent bool
 	// LockedUntil is the lease set by this claim. It doubles as a fencing
@@ -57,13 +60,14 @@ with picked as (
   set status = 'sending',
       locked_until = now() + make_interval(secs => $3),
       attempts = m.attempts + 1,
+      maybe_delivered = m.maybe_delivered or picked.prev_status = 'sending',
       updated_at = now()
   from picked
   where m.id = picked.id
   returning m.id, m.campaign_id, m.user_id, m.channel, m.recipient, coalesce(m.subject, '') as subject,
-            m.body, m.attempts, m.rate_limited, picked.prev_status = 'sending' as recovered, m.locked_until
+            m.body, m.attempts, m.rate_limited, picked.prev_status = 'sending' as recovered, m.maybe_delivered, m.locked_until
 )
-select c.id, c.campaign_id, c.user_id, c.channel, c.recipient, c.subject, c.body, c.attempts, c.rate_limited, c.recovered, c.locked_until,
+select c.id, c.campaign_id, c.user_id, c.channel, c.recipient, c.subject, c.body, c.attempts, c.rate_limited, c.recovered, c.maybe_delivered, c.locked_until,
        coalesce(case c.channel when 'sms' then u.sms_consent else u.email_consent end, false) as has_consent
 from claimed c join users u on u.id = c.user_id`
 
@@ -78,7 +82,7 @@ func (s *Store) Claim(ctx context.Context, channel string, limit int, lease time
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Job, error) {
 		var j Job
 		err := r.Scan(&j.ID, &j.CampaignID, &j.UserID, &j.Channel, &j.Recipient, &j.Subject, &j.Body,
-			&j.Attempts, &j.RateLimited, &j.Recovered, &j.LockedUntil, &j.HasConsent)
+			&j.Attempts, &j.RateLimited, &j.Recovered, &j.MaybeDelivered, &j.LockedUntil, &j.HasConsent)
 		return j, err
 	})
 }
@@ -119,6 +123,13 @@ func (s *Store) MarkRetry(ctx context.Context, j Job, at time.Time, refundAttemp
 	return s.exec(ctx, `update messages set status='queued', next_attempt_at=$3,
 		attempts = case when $4 then greatest(attempts-1, 0) else attempts end,
 		locked_until=null, last_error=$5, updated_at=now()`+fence, j.ID, j.LockedUntil, at, refundAttempt, lastErr)
+}
+
+// MarkUncertainRetry re-queues the message for at after an uncertain outcome
+// and records that it may already have been delivered.
+func (s *Store) MarkUncertainRetry(ctx context.Context, j Job, at time.Time, lastErr string) error {
+	return s.exec(ctx, `update messages set status='queued', next_attempt_at=$3, maybe_delivered=true,
+		locked_until=null, last_error=$4, updated_at=now()`+fence, j.ID, j.LockedUntil, at, lastErr)
 }
 
 // MarkRateLimited re-queues the message for at after a 429: the attempt is
