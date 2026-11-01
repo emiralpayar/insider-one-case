@@ -182,3 +182,16 @@ func TestIneffectiveConditions(t *testing.T) {
 		t.Fatalf("narrowing rule reported ineffective: %v", got)
 	}
 }
+
+// The real data check wired into Composer.RuleCheck (cmd/composer/main.go).
+func TestIneffectiveCheckReportsTautology(t *testing.T) {
+	pool := seeded(t)
+	r := filtered(cond("city", "in", []string{"İstanbul"}), cond("order_count", "lte", 500))
+	errs := segment.IneffectiveCheck(pool)(context.Background(), r)
+	if len(errs) != 1 || errs[0].Code != "tautological_condition" || errs[0].Path != "conditions[1]" {
+		t.Fatalf("errs = %v", errs)
+	}
+	if errs := segment.IneffectiveCheck(pool)(context.Background(), istanbulAbandoned()); len(errs) != 0 {
+		t.Fatalf("narrowing rule: %v", errs)
+	}
+}

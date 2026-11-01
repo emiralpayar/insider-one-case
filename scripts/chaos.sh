@@ -9,9 +9,13 @@
 #      (no graceful shutdown: its in-flight sends are cut mid-request)
 #   3. record the rows that worker held in 'sending' at the moment of the kill
 #   4. wait until every message of the campaign is terminal
-#   5. check: nothing stuck in queued/sending, the surviving worker took over,
-#      every message the killed worker held got a final state, and the
-#      provider delivered no message more than once
+#   5. check: nothing stuck in queued/sending, the surviving worker took over
+#      after the kill, every message the killed worker held got a final state,
+#      and nothing was delivered twice. With idempotency on, the provider's
+#      delivery counters cannot exceed 1 whatever the queue does, so the queue
+#      is checked with the mock's detectors instead: no key in flight twice,
+#      and a resend after a success answer only for messages the dead worker
+#      had already sent.
 # The killed worker is started again at the end.
 set -euo pipefail
 
@@ -30,11 +34,14 @@ curl -sf "${API%/api}/readyz" >/dev/null || fail "stack is not running; start it
 workers=$(docker compose ps -q worker)
 [ "$(echo "$workers" | wc -l | tr -d ' ')" -ge 2 ] || fail "need 2 running workers (docker compose up -d)"
 
-# Leader of a channel = the worker whose last leadership log line for it is "acquired".
+# Leader of a channel = the worker whose last leadership log line for it, since
+# the container's current start, is "acquired". (A SIGKILLed worker never logs
+# "released", and a restarted container keeps its old logs.)
 leader_of() { # channel [workers...]
   local ch=$1; shift
   for w in ${@:-$workers}; do
-    if docker logs "$w" 2>&1 | grep -E "dispatch $ch: (acquired|released)" | tail -1 | grep -q acquired; then
+    if docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' "$w")" "$w" 2>&1 |
+      grep -E "dispatch $ch: (acquired|released)" | tail -1 | grep -q acquired; then
       echo "$w"; return
     fi
   done
@@ -45,6 +52,8 @@ idem=${idem:-true}
 
 before=$(curl -sf "$PROVIDER/v1/stats")
 delivered_before=$(echo "$before" | field delivered)
+concurrent_before=$(echo "$before" | field concurrent_same_key)
+resent_before=$(echo "$before" | field resent_after_ack)
 
 say "1) Kampanya oluşturuluyor (herkese, SMS + e-posta)"
 id=$(json -X POST "$API/campaigns" -d '{"brief":"Chaos test: worker gönderim ortasında öldürülüyor."}' | sed -nE 's/.*"id":"([0-9a-f-]{36})".*/\1/p')
@@ -55,7 +64,8 @@ json -X PUT "$API/campaigns/$id/channels" -d '{"channels":["sms","email"]}' >/de
 # (channel, to, subject, body), so identical text across runs would add up.
 run=${id%%-*}
 json -X PUT "$API/campaigns/$id/content" -d '{"content":{"sms":"Merhaba {{first_name}}, chaos testi '"$run"'.","email":{"subject":"Chaos testi '"$run"'","preheader":"","body":"Merhaba {{first_name}}, bu bir chaos testi mesajıdır ('"$run"')."}}}' >/dev/null
-enq=$(json -X POST "$API/campaigns/$id/approve" -d '{"confirm_large_audience":true}')
+# confirm_duplicate: earlier chaos runs reached the same people with the same brief.
+enq=$(json -X POST "$API/campaigns/$id/approve" -d '{"confirm_large_audience":true,"confirm_duplicate":true}')
 echo "kampanya $id onaylandı: $enq"
 echo "provider idempotency: $idem"
 
@@ -71,6 +81,7 @@ channels="'sms'"
 [ "$(leader_of email)" = "$victim" ] && channels="'sms','email'"
 vname=$(name_of "$victim")
 t0=$(psql_ "select now()")
+t0_docker=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 docker kill -s KILL "$victim" >/dev/null
 echo "gönderilen: $sent — SMS lideri $vname SIGKILL ile öldürüldü (kanallar: $channels)"
 
@@ -105,9 +116,15 @@ echo "kampanyanın durumları:"
 psql_ "select '  '||status, count(*) from messages where campaign_id='$id' group by status order by status"
 echo "yarım kalan $n_inflight mesajın son durumu:"
 psql_ "select '  '||status, count(*) from messages where id in ($ids) group by status order by status"
-survivor=$(leader_of sms $(echo "$workers" | grep -v "$victim"))
+# The survivor must have taken SMS leadership after the kill.
+survivor=""
+for w in $(echo "$workers" | grep -v "$victim"); do
+  docker logs --since "$t0_docker" "$w" 2>&1 | grep -q "dispatch sms: acquired" && survivor=$w
+done
 after=$(curl -sf "$PROVIDER/v1/stats")
 max=$(echo "$after" | field max_deliveries_per_recipient_message)
+concurrent=$(( $(echo "$after" | field concurrent_same_key) - concurrent_before ))
+resent=$(( $(echo "$after" | field resent_after_ack) - resent_before ))
 delivered=$(( $(echo "$after" | field delivered) - delivered_before ))
 sent_rows=$(psql_ "select count(*) from messages where campaign_id='$id' and status='sent'")
 echo "provider: bu testte teslim edilen $delivered, veritabanında sent $sent_rows, alıcı başına en fazla teslim $max"
@@ -117,8 +134,15 @@ say "5) Kontroller"
 ok=1
 check() { if eval "$2"; then echo "  ✓ $1"; else echo "  ✗ $1"; ok=0; fi; }
 check "takılı kalan mesaj yok (queued/sending = 0)" '[ "$open" -eq 0 ]'
-check "SMS liderliğini kalan worker devraldı" '[ -n "$survivor" ]'
-check "hiçbir mesaj iki kez teslim edilmedi (max = 1)" '[ "$max" -le 1 ]'
+check "SMS liderliğini kalan worker kill'den sonra devraldı" '[ -n "$survivor" ]'
+check "aynı mesaj iki worker'dan aynı anda gönderilmedi (concurrent_same_key = 0)" '[ "$concurrent" -eq 0 ]'
+if [ "$idem" = "true" ]; then
+  # Only the dead worker's already-sent messages may be sent again (same key,
+  # the provider deduplicates); anything more means the queue double-sent.
+  check "başarılı cevaptan sonra tekrar gönderim yalnızca yarım kalanlarda ($resent ≤ $n_reached)" '[ "$resent" -le "$n_reached" ]'
+else
+  check "hiçbir mesaj iki kez teslim edilmedi (max = 1)" '[ "$max" -le 1 ]'
+fi
 if [ "$idem" = "true" ]; then
   check "provider teslim sayısı = veritabanındaki sent sayısı" '[ "$delivered" -eq "$sent_rows" ]'
 else
@@ -134,7 +158,9 @@ else
   nonunk=$(psql_ "select count(*) from messages where id in ($ids) and status <> 'unknown'")
   check "idempotency yok: yarım kalanlar tekrar gönderilmedi, unknown oldu" '[ "$nonunk" -eq 0 ]'
 fi
-redelivered=$(for m in $reached; do curl -sf "$PROVIDER/v1/messages/$m"; done | grep '"deliveries"' | grep -vc '"deliveries":1,' || true)
-check "ölmeden önce provider'a ulaşan $n_reached mesaj tekrar teslim edilmedi" '[ "$redelivered" -eq 0 ]'
+if [ "$idem" != "true" ]; then
+  redelivered=$(for m in $reached; do curl -sf "$PROVIDER/v1/messages/$m"; done | grep '"deliveries"' | grep -vc '"deliveries":1,' || true)
+  check "ölmeden önce provider'a ulaşan $n_reached mesaj tekrar teslim edilmedi" '[ "$redelivered" -eq 0 ]'
+fi
 [ "$ok" -eq 1 ] || fail "chaos test failed"
 printf '\n\033[32mCHAOS TEST PASSED\033[0m\n'

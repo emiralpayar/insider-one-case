@@ -181,3 +181,58 @@ func TestConcurrentDuplicateApprovalsSerialized(t *testing.T) {
 		}
 	}
 }
+
+// Only sends inside the 30-day window and messages that were or may have
+// been delivered count; exact matches stay when the LLM fails and are not
+// offered to it.
+func TestDuplicateWindowStatusAndLLMFallback(t *testing.T) {
+	pool := seeded(t)
+	ctx := context.Background()
+	store := campaign.NewStore(pool, "mock")
+	first := readyCampaign(t, pool, istanbulAbandoned())
+	if _, err := campaign.Approve(ctx, pool, first, campaign.ApproveRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	cur := readyCampaign(t, pool, istanbulAbandoned())
+	c, _ := store.Get(ctx, cur)
+	count := func() int {
+		t.Helper()
+		rep, err := campaign.DuplicateSends(ctx, pool, c, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(rep.Duplicates)
+	}
+	if count() == 0 {
+		t.Fatal("exact duplicate not reported")
+	}
+
+	// LLM failure keeps the exact match; exact matches are not LLM candidates.
+	var offered int
+	rep, err := campaign.DuplicateSends(ctx, pool, c, func(_ context.Context, _ string, cs []campaign.SimilarCandidate) (map[uuid.UUID]string, error) {
+		offered = len(cs)
+		return nil, errors.New("boom")
+	})
+	if err != nil || len(rep.Duplicates) == 0 || offered != 0 {
+		t.Fatalf("LLM error: %+v, err %v, offered %d", rep, err, offered)
+	}
+
+	// Messages that certainly did not reach anyone do not count.
+	mustExec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustExec(`update messages set status='failed' where campaign_id=$1 and channel='sms'`, first)
+	mustExec(`update messages set status='skipped_no_consent' where campaign_id=$1 and channel='email'`, first)
+	if n := count(); n != 0 {
+		t.Fatalf("failed/skipped messages counted: %d", n)
+	}
+	mustExec(`update messages set status='sent' where campaign_id=$1`, first)
+	// Outside the window.
+	mustExec(`update campaigns set approved_at = now() - interval '31 days' where id=$1`, first)
+	if n := count(); n != 0 {
+		t.Fatalf("campaign from 31 days ago counted: %d", n)
+	}
+}

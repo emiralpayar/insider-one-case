@@ -32,6 +32,9 @@ jobs:
           go-version: "1.24"
           cache-dependency-path: backend/go.sum
       - run: go vet ./...
+      # The eval and live tests are not run in CI (they call the real API),
+      # but they must keep compiling.
+      - run: go vet -tags=eval,live ./internal/llm
       - run: go test ./... -race
 
   frontend:

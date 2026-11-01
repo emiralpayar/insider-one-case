@@ -33,6 +33,16 @@ type Server struct {
 	acceptedN  int
 	delivered  int
 	duplicates int
+
+	// Queue-misbehaviour detectors that work with idempotency on (where the
+	// delivery counters cannot exceed 1): requests for a key while another
+	// request for it is still in flight, and requests for a key that already
+	// got a success answer (only an earlier lost answer or a crash justifies
+	// that, see chaos.sh).
+	inflight       map[string]int
+	acked          map[string]bool
+	concurrentSame int
+	resentAfterAck int
 }
 
 // New creates a Server. Now and Rand default to wall clock / time-seeded rand.
@@ -73,6 +83,30 @@ func (s *Server) resetLocked() {
 	s.per = map[msgKey]int{}
 	s.window = map[string][]time.Time{}
 	s.accepted = map[string][]time.Time{}
+	s.inflight = map[string]int{}
+	s.acked = map[string]bool{}
+	s.concurrentSame, s.resentAfterAck = 0, 0
+}
+
+// arrive records a request for key; the returned func marks it finished.
+func (s *Server) arrive(key string) func(acked bool) {
+	s.mu.Lock()
+	s.inflight[key]++
+	if s.inflight[key] > 1 {
+		s.concurrentSame++
+	}
+	if s.acked[key] {
+		s.resentAfterAck++
+	}
+	s.mu.Unlock()
+	return func(acked bool) {
+		s.mu.Lock()
+		s.inflight[key]--
+		if acked {
+			s.acked[key] = true
+		}
+		s.mu.Unlock()
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
@@ -107,6 +141,9 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, channel string) {
 		writeJSON(w, 400, map[string]string{"error": "invalid body"})
 		return
 	}
+	acked := false
+	done := s.arrive(key)
+	defer func() { done(acked) }()
 
 	s.mu.Lock()
 	cfg := s.cfg
@@ -143,6 +180,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, channel string) {
 		if rec, ok := s.msgs[key]; ok {
 			s.duplicates++
 			s.mu.Unlock()
+			acked = true
 			writeJSON(w, 200, map[string]any{"id": rec.ID, "status": "accepted", "duplicate": true})
 			return
 		}
@@ -181,6 +219,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, channel string) {
 		}
 		writeJSON(w, 504, map[string]string{"error": "gateway timeout"})
 	default:
+		acked = true
 		writeJSON(w, 202, map[string]string{"id": id, "status": "accepted"})
 	}
 }
@@ -232,6 +271,7 @@ func (s *Server) stats(w http.ResponseWriter, _ *http.Request) {
 	out := map[string]any{
 		"accepted": s.acceptedN, "delivered": s.delivered, "duplicates_suppressed": s.duplicates,
 		"max_deliveries_per_recipient_message": max, "by_channel": by,
+		"concurrent_same_key": s.concurrentSame, "resent_after_ack": s.resentAfterAck,
 	}
 	s.mu.Unlock()
 	writeJSON(w, 200, out)

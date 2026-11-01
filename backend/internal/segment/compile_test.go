@@ -1,6 +1,7 @@
 package segment_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -49,5 +50,32 @@ func TestCompileIncompleteMatchesNobody(t *testing.T) {
 	where, args, err := segment.Compile(segment.Rule{Audience: "filtered", Unmapped: []string{"VIP"}}, 0, time.Now())
 	if err != nil || where != "FALSE" || len(args) != 0 {
 		t.Fatal(where, args, err)
+	}
+}
+
+// Every field's value goes in as a bind parameter: none of the (distinctive)
+// values appears in the SQL text once the $n placeholders are removed.
+func TestCompileAllFieldsParamsOnly(t *testing.T) {
+	r := filtered(
+		cond("city", "not_in", []string{"Ankara"}),
+		cond("language", "eq", "en"),
+		cond("abandoned_cart", "within_days", 37),
+		cond("purchased", "not_within_days", 41),
+		cond("order_count", "gte", 43),
+		cond("total_spent", "lte", 4747),
+		cond("signed_up", "within_days", 53),
+	)
+	where, args, err := segment.Compile(r, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := regexp.MustCompile(`\$\d+`).ReplaceAllString(where, "")
+	for _, v := range []string{"Ankara", "'en'", "37", "41", "43", "4747", "53"} {
+		if strings.Contains(text, v) {
+			t.Fatalf("value %q in SQL text: %s", v, where)
+		}
+	}
+	if len(args) < 7 {
+		t.Fatalf("args = %v", args)
 	}
 }

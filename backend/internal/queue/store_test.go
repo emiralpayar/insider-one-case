@@ -53,6 +53,49 @@ func TestClaimSkipLockedNoOverlap(t *testing.T) {
 	}
 }
 
+// Deterministic SKIP LOCKED check: while another transaction holds row locks
+// on 150 queued rows (a claim in progress), Claim neither blocks on them nor
+// returns them.
+func TestClaimSkipsRowsLockedByAnotherClaim(t *testing.T) {
+	pool := newDB(t, 300)
+	camp := insertCampaign(t, pool, "sending")
+	insertMessages(t, pool, camp, "sms", 200)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `select id from messages where channel='sms' order by next_attempt_at, id limit 150 for update`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		locked[id] = true
+	}
+	rows.Close()
+
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	got, err := NewStore(pool).Claim(cctx, "sms", 200, lease)
+	if err != nil {
+		t.Fatalf("claim blocked or failed on locked rows: %v", err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("claimed %d, want the 50 unlocked rows", len(got))
+	}
+	for _, j := range got {
+		if locked[j.ID] {
+			t.Fatalf("claimed row %s locked by another transaction", j.ID)
+		}
+	}
+}
+
 func TestClaimRecoversExpiredLease(t *testing.T) {
 	pool := newDB(t, 300)
 	camp := insertCampaign(t, pool, "sending")

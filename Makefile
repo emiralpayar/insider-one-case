@@ -9,9 +9,11 @@ test-db-up:
 test-db-down:
 	$(COMPOSE_TEST) down -v
 
+# Same checks as CI: go vet (incl. the eval/live tagged files), go test with
+# the race detector, frontend tests and the type-checked build.
 test: test-db-up
-	cd backend && TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test ./...
-	@if [ -f frontend/package.json ]; then cd frontend && { [ -d node_modules ] || npm ci; } && npm test; else echo "frontend: skipped (no package.json)"; fi
+	cd backend && go vet ./... && go vet -tags=eval,live ./internal/llm && TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -race ./...
+	@if [ -f frontend/package.json ]; then cd frontend && { [ -d node_modules ] || npm ci; } && npm test && npm run build; else echo "frontend: skipped (no package.json)"; fi
 
 # Whole system in the background; returns once every service is healthy.
 up:

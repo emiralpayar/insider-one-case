@@ -22,6 +22,9 @@ type providerStats struct {
 	Delivered int `json:"delivered"`
 	Dupes     int `json:"duplicates_suppressed"`
 	Max       int `json:"max_deliveries_per_recipient_message"`
+	// Detectors that still work with idempotency on (see mockprovider).
+	Concurrent     int `json:"concurrent_same_key"`
+	ResentAfterAck int `json:"resent_after_ack"`
 }
 
 func newMock(t *testing.T, cfg mockprovider.Config) (*mockprovider.Server, *httptest.Server) {
@@ -123,11 +126,42 @@ func TestEndToEndExactlyOncePerRecipient(t *testing.T) {
 	if st.Max != 1 {
 		t.Fatalf("max deliveries per recipient message = %d", st.Max)
 	}
+	// With idempotency on, Max cannot exceed 1 even if the queue double-sends;
+	// these catch it: no key in flight twice, no resend after a success answer.
+	if st.Concurrent != 0 || st.ResentAfterAck != 0 {
+		t.Fatalf("queue double-sent: %d concurrent same-key requests, %d resent after ack", st.Concurrent, st.ResentAfterAck)
+	}
 	if c["sent"] != st.Delivered {
 		t.Fatalf("sent rows %d != provider delivered %d", c["sent"], st.Delivered)
 	}
 	if c["sent"] < 140 {
 		t.Fatalf("only %d sent", c["sent"])
+	}
+}
+
+// Without idempotency the provider delivers every request, so Max counts real
+// deliveries: two workers under faults never deliver a message twice, and
+// deliveries lie between sent and sent+unknown (uncertain sends not retried).
+func TestEndToEndNonIdempotentAtMostOnce(t *testing.T) {
+	pool := newDB(t, 300)
+	camp := insertCampaign(t, pool, "sending")
+	insertMessages(t, pool, camp, "sms", 150)
+	_, srv := newMock(t, mockprovider.Config{FailRate: 0.1, RateLimited429: 0.05, LostResponseRate: 0.05, Idempotency: false})
+	p := NewHTTPProvider(srv.URL, false, 5*time.Second)
+	mustExec(t, pool, `update users set sms_consent=true`)
+
+	stop := runAll(t, newDispatcher(pool, p, "sms"), newDispatcher(pool, p, "sms"))
+	waitFor(t, 60*time.Second, "all messages terminal", allTerminal(t, pool, camp))
+	stop()
+
+	st := fetchStats(t, srv)
+	c := statusCounts(t, pool, camp)
+	t.Logf("db=%v provider=%+v", c, st)
+	if st.Max != 1 || st.Concurrent != 0 {
+		t.Fatalf("max deliveries %d, concurrent same-key %d", st.Max, st.Concurrent)
+	}
+	if st.Delivered < c["sent"] || st.Delivered > c["sent"]+c["unknown"] {
+		t.Fatalf("delivered %d not in [sent %d, sent+unknown %d]", st.Delivered, c["sent"], c["sent"]+c["unknown"])
 	}
 }
 
