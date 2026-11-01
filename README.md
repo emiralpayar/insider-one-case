@@ -109,7 +109,7 @@ Testler gerçek Postgres kullanır (her test kendi veritabanını açar), gerçe
 |---|---|
 | `queue.TestEndToEndExactlyOncePerRecipient` | İki worker, mock provider %10 5xx + %5 429 + %5 kayıp cevap modunda: her alıcıya tam bir teslimat (`max_deliveries_per_recipient_message == 1`), `sent` satırları provider teslimatlarına eşit. |
 | `queue.TestRateLimitAcrossWorkers` | Üç worker aynı kanalda: provider herhangi bir 1 sn penceresinde 100'den fazla istek görmez. |
-| `queue.TestExpiredLock*`, `TestUncertain*`, `TestNotSentExhaustedIsFailed` | Çökme kurtarma ve hata sınıflandırması: idempotent modda aynı key ile tekrar, değilse `unknown`; kesin gitmeyen hata tükenirse `failed`. |
+| `queue.TestExpiredLock*`, `TestUncertain*`, `TestNotSentExhaustedIsFailed` | Çökme kurtarma (veritabanında simüle; gerçek kill için `make chaos`) ve hata sınıflandırması: idempotent modda aynı key ile tekrar, değilse `unknown`; kesin gitmeyen hata tükenirse `failed`. |
 | `queue.TestStaleLeaseMarkIsNoop`, `TestRevokedConsentSkipped` | Kira çitleme; izin onaydan sonra geri çekilirse mesaj gitmez. |
 | `segment.TestAbandonedCartSemantics` | "20 gün önce alıp 5 gün önce sepete ekleyen" kişi dahil `abandoned_cart` tanımı. |
 | `campaign.TestApproveConcurrentOnce` | Eşzamanlı onay istekleri tek set mesaj üretir. |
@@ -121,7 +121,7 @@ Testler gerçek Postgres kullanır (her test kendi veritabanını açar), gerçe
 | `segment.TestValidateIncompleteRule`, `TestValidateGenerated` | Eşlenemeyen kitle boş taslak olarak kalır ve kimseyle eşleşmez; modelin herkesi seçen yer tutucu koşulları reddedilir. |
 | `content.TestValidatePlaceholderSuffix` | `{{city}}'daki` gibi yapışık ekler reddedilir. |
 | `content.TestUnrequestedClaims`, `llm.TestContentRepairsUnrequestedClaim` | Brief'te olmayan vaat ("stoklar tükenmeden") model çıktısında onarıma döner; brief izin veriyorsa ("kargo bedava" → "ücretsiz kargo") geçer. |
-| Frontend (Vitest, 81 test) | GSM-7/UCS-2 parça hesabı, kısmi JSON ayrıştırma, SSE okuyucu, kural yardımcıları, değişken etiketi ↔ metin dönüşümü, gönderim günlüğü biçimlendirme. |
+| Frontend (Vitest, 98 test) | GSM-7/UCS-2 parça hesabı, kısmi JSON ayrıştırma, SSE okuyucu, kural yardımcıları, değişken etiketi ↔ metin dönüşümü, gönderim günlüğü biçimlendirme, kampanya adı türetme, önizleme seçimi, durum etiketleri ve filtreler. |
 
 Gerçek Claude ile (key `.env`'de olmalı, `make test`'e dahil değil):
 
