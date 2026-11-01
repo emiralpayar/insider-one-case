@@ -21,6 +21,12 @@ func TestUnrequestedClaims(t *testing.T) {
 		{"number differs", "Sepet hatırlatması, %30 indirim.",
 			Content{SMS: "Sepetinde %50 indirim!", Email: Email{Subject: "%30 indirim", Body: "5.000 TL üzeri"}},
 			[]string{"sms", "email.body"}},
+		{"decimal is not thousands", "1,5 kat puan.",
+			Content{SMS: "%15 indirim", Email: Email{Subject: "1,5 kat", Body: "50.00 TL"}},
+			[]string{"sms", "email.body"}},
+		{"ascii I folds like Turkish", "Ücretsiz IADE ve GARANTI vurgula.",
+			Content{SMS: "Ücretsiz iade ve garanti!", Email: Email{Subject: "x", Body: "Sınırlı SAYIDA"}},
+			[]string{"email.body"}},
 		{"numbers match with separators", "5000 TL üzeri harcamaya %10 indirim.",
 			Content{SMS: "5.000 TL üzeri %10 indirim", Email: Email{Subject: "%10", Body: "5000 TL"}}, nil},
 	}

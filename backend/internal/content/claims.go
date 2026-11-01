@@ -19,15 +19,25 @@ var claimGroups = [][]string{
 	{"garanti"},
 	{"iade"},
 	{"hediye"},
-	{"sınırlı", "son gün", "saat içinde", "bugüne özel"},
+	{"sinirli", "son gün", "saat içinde", "bugüne özel"}, // folded: ı→i
 }
 
 // numberRe matches numbers with optional thousands/decimal separators
 // ("30", "5.000", "1,5").
 var numberRe = regexp.MustCompile(`\d+(?:[.,]\d+)*`)
 
-// normNumber drops separators so "5.000" and "5000" compare equal.
-func normNumber(s string) string { return strings.NewReplacer(".", "", ",", "").Replace(s) }
+// thousandsRe is a Turkish thousands-grouped integer ("5.000", "1.250.000").
+var thousandsRe = regexp.MustCompile(`^\d{1,3}(?:\.\d{3})+$`)
+
+// normNumber makes "5.000" and "5000" compare equal while keeping "1,5" and
+// "15" (or "50.00" and "5000") apart: dots are dropped only in thousands
+// grouping, and a comma is the decimal separator.
+func normNumber(s string) string {
+	if thousandsRe.MatchString(s) {
+		return strings.ReplaceAll(s, ".", "")
+	}
+	return strings.ReplaceAll(s, ",", ".")
+}
 
 // UnrequestedClaims reports promises in c (stock, delivery, warranty,
 // returns, gifts, deadlines) that the brief does not mention, and numbers
@@ -67,7 +77,11 @@ func UnrequestedClaims(brief string, c Content) verr.List {
 	return errs
 }
 
-func lower(s string) string { return strings.ToLowerSpecial(unicode.TurkishCase, s) }
+// lower folds for matching: Turkish lower case, then ı→i, so "IADE" (typed
+// without a Turkish keyboard), "İADE" and "iade" all match the stem "iade".
+func lower(s string) string {
+	return strings.ReplaceAll(strings.ToLowerSpecial(unicode.TurkishCase, s), "ı", "i")
+}
 
 func containsAny(s string, words []string) bool {
 	for _, w := range words {

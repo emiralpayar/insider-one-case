@@ -2,6 +2,7 @@ package content
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -69,6 +70,9 @@ func checkField(path, text string, required bool, limit int, code, msgFmt string
 	toks := scan(text)
 	for i, t := range toks {
 		switch {
+		case t.kind == tokLit && singleBraceRe.MatchString(t.text):
+			errs = append(errs, verr.Error{Path: path, Code: "malformed_placeholder",
+				Message: fmt.Sprintf("Tek süslü parantezli yer tutucu: %q (doğrusu {{%s}})", singleBraceRe.FindString(t.text), singleBraceRe.FindStringSubmatch(t.text)[1])})
 		case t.kind == tokBad:
 			errs = append(errs, verr.Error{Path: path, Code: "malformed_placeholder",
 				Message: fmt.Sprintf("Hatalı yer tutucu: %q", t.raw)})
@@ -95,6 +99,12 @@ func checkField(path, text string, required bool, limit int, code, msgFmt string
 	}
 	return errs
 }
+
+// singleBraceRe finds an allowed variable written with single braces
+// ("{first_name}", "{ city }") in literal text: it would reach recipients
+// verbatim, since only {{name}} is substituted. Other single-brace text
+// ("{x}") stays allowed.
+var singleBraceRe = regexp.MustCompile(`\{\s*(first_name|city)\s*\}`)
 
 // gluedSuffix reports whether lit, the text right after a placeholder, starts
 // with a suffix attached to it: an apostrophe or a letter.

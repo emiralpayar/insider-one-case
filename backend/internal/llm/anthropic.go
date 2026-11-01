@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -21,6 +22,9 @@ type anthropicClient struct {
 	model  string
 }
 
+// callTimeout bounds one model call (one attempt of the repair loop).
+const callTimeout = 2 * time.Minute
+
 // NewAnthropic returns a Client backed by the Anthropic Messages API. Create
 // one per model (segment and content may use different models).
 func NewAnthropic(apiKey, model string) Client {
@@ -35,6 +39,10 @@ func (a *anthropicClient) Name() string { return "anthropic" }
 // Complete streams the response, forwarding text deltas to onDelta. A refusal
 // returns ErrRefusal; hitting max_tokens returns ErrTruncated.
 func (a *anthropicClient) Complete(ctx context.Context, req Request, onDelta func(string)) (Response, error) {
+	// The SDK sets no request timeout and the HTTP handlers pass the
+	// request context; bound each model call so a stalled stream ends.
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
 	stream := a.client.Messages.NewStreaming(ctx, buildParams(a.model, req))
 	defer stream.Close()
 	msg := anthropic.Message{}

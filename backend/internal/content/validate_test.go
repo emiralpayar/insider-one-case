@@ -155,3 +155,20 @@ func TestValidatePlaceholderSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateSingleBracePlaceholder(t *testing.T) {
+	c := Content{SMS: "Merhaba {first_name}, { city } için indirim", Email: Email{Subject: "x", Body: "y {}"}}
+	errs := Validate(c, []string{"sms", "email"}, WorstCase{}.WithDefaults())
+	n := 0
+	for _, e := range errs {
+		if e.Code == "malformed_placeholder" && e.Path == "sms" {
+			n++
+		}
+		if e.Path == "email.body" {
+			t.Fatalf("empty braces flagged: %+v", e)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("errs = %v", errs)
+	}
+}
