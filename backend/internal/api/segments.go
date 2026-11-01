@@ -140,3 +140,32 @@ func (s *Server) previewSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, pv)
 }
+
+// segmentMembers lists the users of an unsaved rule, a page at a time
+// ("Kitleyi gör"). The rule is validated and compiled as for preview.
+func (s *Server) segmentMembers(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Rule   segment.Rule `json:"rule"`
+		Page   int          `json:"page"`
+		Search string       `json:"search"`
+	}
+	if err := decode(r, &req, false); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	rule, errs := segment.Validate(req.Rule)
+	if len(errs) > 0 {
+		writeError(w, r, errs)
+		return
+	}
+	if req.Page < 0 {
+		writeError(w, r, badRequest("page pozitif bir tam sayı olmalı"))
+		return
+	}
+	res, err := segment.Members(r.Context(), s.pool, rule, s.now(), segment.MemberQuery{Page: req.Page, Search: req.Search})
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}

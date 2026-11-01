@@ -8,6 +8,7 @@ import BriefStep from '../components/BriefStep.vue'
 import RuleEditor from '../components/RuleEditor.vue'
 import ContentEditor from '../components/ContentEditor.vue'
 import ApprovePanel from '../components/ApprovePanel.vue'
+import CampaignName from '../components/CampaignName.vue'
 import Icon from '../components/Icon.vue'
 import Stepper from '../components/Stepper.vue'
 import { FLOW_STEPS, type Step } from '../lib/steps'
@@ -133,6 +134,11 @@ function onCampaign(c: Campaign) {
   campaign.value = c
 }
 
+function onRenamed(c: Campaign) {
+  // Only the name: the step components own their unsaved drafts.
+  if (campaign.value) campaign.value = { ...campaign.value, name: c.name }
+}
+
 function onLocked() {
   if (campaign.value) router.replace(`/campaigns/${campaign.value.id}`)
 }
@@ -140,19 +146,19 @@ function onLocked() {
 
 <template>
   <div class="page-head">
-    <div>
+    <div style="min-width: 0; max-width: 820px">
       <div class="page-eyebrow">
         <RouterLink to="/"><Icon name="arrow-left" :size="13" /> Kampanyalar</RouterLink>
         <template v-if="campaign">
           <span>/</span>
-          <span class="mono">{{ campaign.id.slice(0, 8) }}</span>
+          <span>Düzenle</span>
         </template>
       </div>
-      <h1>{{ campaign ? 'Kampanyayı düzenle' : 'Yeni kampanya' }}</h1>
+      <CampaignName v-if="campaign" :campaign="campaign" @renamed="onRenamed" />
+      <h1 v-else>Yeni kampanya</h1>
       <p v-if="campaign" class="row" style="gap: 8px">
         <span class="badge badge-dot" :class="'status-' + campaign.status">{{ CAMPAIGN_STATUS[campaign.status] }}</span>
         <span v-if="campaign.llm_provider === 'mock'" class="badge badge-mock">MOCK</span>
-        <span class="muted small mono" :title="campaign.id">{{ campaign.id }}</span>
       </p>
       <p v-else>Brief'inizi yazın; Claude kitleyi ve mesajları önersin, son kararı siz verin.</p>
     </div>

@@ -69,6 +69,28 @@ func (s *Server) getCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// putName renames a campaign (allowed in every status).
+func (s *Server) putName(w http.ResponseWriter, r *http.Request) {
+	id, err := campaignID(r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &req, false); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	c, err := s.store.Rename(r.Context(), id, req.Name)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
 func (s *Server) putChannels(w http.ResponseWriter, r *http.Request) {
 	id, err := campaignID(r)
 	if err != nil {

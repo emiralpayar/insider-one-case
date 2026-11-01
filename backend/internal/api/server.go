@@ -91,10 +91,12 @@ func New(cfg Config) *Server {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/config", s.config)
 		r.Post("/segments/preview", s.previewSegment)
+		r.Post("/segments/members", s.segmentMembers)
 		r.Post("/campaigns", s.createCampaign)
 		r.Get("/campaigns", s.listCampaigns)
 		r.Route("/campaigns/{id}", func(r chi.Router) {
 			r.Get("/", s.getCampaign)
+			r.Put("/name", s.putName)
 			r.Post("/segment/generate", s.generateSegment)
 			r.Post("/segment/refine", s.refineSegment)
 			r.Put("/segment", s.putSegment)
@@ -103,6 +105,7 @@ func New(cfg Config) *Server {
 			r.Put("/channels", s.putChannels)
 			r.Post("/approve", s.approve)
 			r.Get("/status", s.status)
+			r.Get("/messages", s.listMessages)
 		})
 	})
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

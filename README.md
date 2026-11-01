@@ -34,7 +34,7 @@ Hızlı kontrol: arayüzde örnek brief'i ("Son 30 günde sepetine ürün ekleyi
 
 ## Arayüz
 
-Sol menülü tek sayfa uygulama: kampanya listesi (durum ve kanal rozetleri, özet sayılar) ve 5 adımlı composer (Brief → Kitle → İçerik → Onay → Gönderim). Her adım geçişinde sayfa en üstten başlar; ulaşılamayan adımlar adım göstergesinde kapalıdır. Kitle adımında koşul formu, Claude'un açıklaması, canlı kişi sayıları ve örnek kişiler; içerik adımında değişken etiketli editörler, uzunluk ve SMS parça göstergesi, telefon/gelen kutusu önizlemesi; gönderim adımında genel ilerleme, kanal bazında ilerleme çubukları ve saniyelik hız, sabit boyutlu ve kaydırılabilir **Gönderim günlüğü** (yeniden denemeler ve hatalar, okunur nedenlerle: "Zaman aşımı → 2. denemede gönderildi"). Üst bantlar: kırmızı = key yok, turuncu = MOCK MOD.
+Sol menülü tek sayfa uygulama: kampanya listesi (kampanya adı + brief, durum ve kanal rozetleri, özet sayılar) ve 5 adımlı composer (Brief → Kitle → İçerik → Onay → Gönderim). Kampanyanın adı brief'ten otomatik türetilir (ilk ~60 karakter, kelime sınırında kesilip "…" eklenir) ve composer ile dashboard başlığında yerinde düzenlenebilir. Her adım geçişinde sayfa en üstten başlar; ulaşılamayan adımlar adım göstergesinde kapalıdır. Kitle adımında koşul formu, Claude'un açıklaması, canlı kişi sayıları ve örnek kişiler; **Kitleyi gör** ile kurala uyan tüm kişiler (ad, şehir, dil, SMS/e-posta izni, sipariş sayısı, toplam harcama) sayfa başına 50 kişilik, isimle aranabilir bir çekmecede listelenir. İçerik adımında solda değişken etiketli editörler, uzunluk ve SMS parça göstergesi; sağda kaydırırken görünür kalan tek bir telefon/gelen kutusu önizlemesi (SMS / E-posta ve örnek kişi / isimsiz geçişli; dar ekranda alt alta). Gönderim adımında genel ilerleme, kanal bazında ilerleme çubukları ve saniyelik hız, sabit boyutlu ve kaydırılabilir **Gönderim günlüğü** (yeniden denemeler ve hatalar, okunur nedenlerle: "Zaman aşımı → 2. denemede gönderildi") ve alıcı bazında **Alıcılar** tablosu (durum ve kanal filtresi, "Gitmeyenler" = başarısız + belirsiz + izin yok, sayfa başına 50). Üst bantlar: kırmızı = key yok, turuncu = MOCK MOD.
 
 ## Akış
 
@@ -158,6 +158,9 @@ CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race
 - `GET /metrics` (Prometheus) hem api'de (LLM çağrı sayısı/gecikmesi/doğrulama hatası/onarım) hem her worker'da (`composer_messages_total{channel,outcome}`, provider gecikme histogramı, 429 sayacı, limiter'ın o anki izinli hızı `composer_send_rate`; seriler yalnızca o kanalın lideri olan replikada dolar).
 - `GET /api/config`: `{llm_provider, llm_configured, models}` — arayüzdeki bantlar buradan.
 - `GET /api/campaigns/{id}/status`: durum başına sayılar, kanal kırılımı, 10 sn'lik hız, son 50 hatalı mesaj.
+- `GET /api/campaigns/{id}/messages?status=failed,unknown&channel=sms&page=2`: alıcı bazında mesaj listesi (ad, kanal, durum, deneme, son hata, gönderim zamanı), sayfa başına 50 + toplam.
+- `POST /api/segments/members` (`{rule, page, search}`): kuralın kitlesindeki kişiler, sayfa başına 50 + toplam; kural preview ile aynı şekilde doğrulanıp parametreli SQL'e derlenir.
+- `PUT /api/campaigns/{id}/name` (`{name}`): kampanya adını değiştirir (boş olamaz, en fazla 120 karakter; onaydan sonra da).
 - `llm_calls` tablosu: her Claude çağrısının girdisi, ham çıktısı ve doğrulama hataları.
 - Worker logları kanal liderliğinin hangi replikada olduğunu yazar (`acquired channel leadership`).
 

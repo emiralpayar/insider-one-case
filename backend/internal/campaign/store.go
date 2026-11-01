@@ -39,6 +39,7 @@ var (
 // Campaign is a campaign row.
 type Campaign struct {
 	ID          uuid.UUID        `json:"id"`
+	Name        string           `json:"name"`
 	Brief       string           `json:"brief"`
 	LLMProvider string           `json:"llm_provider"`
 	Channels    []string         `json:"channels"`
@@ -60,14 +61,14 @@ func NewStore(pool *pgxpool.Pool, llmProvider string) *Store {
 	return &Store{pool: pool, llmProvider: llmProvider}
 }
 
-const selectCols = `id, brief, llm_provider, channels, status, segment_rule, content, approved_at, created_at`
+const selectCols = `id, name, brief, llm_provider, channels, status, segment_rule, content, approved_at, created_at`
 
 func scan(row pgx.Row) (Campaign, error) {
 	var (
 		c          Campaign
 		rule, cont []byte
 	)
-	err := row.Scan(&c.ID, &c.Brief, &c.LLMProvider, &c.Channels, &c.Status, &rule, &cont, &c.ApprovedAt, &c.CreatedAt)
+	err := row.Scan(&c.ID, &c.Name, &c.Brief, &c.LLMProvider, &c.Channels, &c.Status, &rule, &cont, &c.ApprovedAt, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -89,11 +90,12 @@ func scan(row pgx.Row) (Campaign, error) {
 	return c, nil
 }
 
-// Create inserts a draft campaign with the default channels.
+// Create inserts a draft campaign with the default channels, named after the
+// brief (DefaultName).
 func (s *Store) Create(ctx context.Context, brief string) (Campaign, error) {
 	return scan(s.pool.QueryRow(ctx,
-		`insert into campaigns (id, brief, llm_provider, status) values ($1, $2, $3, $4) returning `+selectCols,
-		uuid.New(), brief, s.llmProvider, StatusDraft))
+		`insert into campaigns (id, name, brief, llm_provider, status) values ($1, $2, $3, $4, $5) returning `+selectCols,
+		uuid.New(), DefaultName(brief), brief, s.llmProvider, StatusDraft))
 }
 
 // Get returns one campaign or ErrNotFound.

@@ -8,6 +8,7 @@ import { errorText, errorsByPath } from '../lib/errors'
 import { defaultCondition, isUnmappedEmpty, validateLocal } from '../lib/rule'
 import { appState } from '../store'
 import type { Campaign, Condition, PreviewResult, Rule, RuleResponse } from '../types'
+import AudienceDrawer from './AudienceDrawer.vue'
 import AudienceStats from './AudienceStats.vue'
 import ConditionRow from './ConditionRow.vue'
 import Icon from './Icon.vue'
@@ -39,6 +40,9 @@ const unmappedPhrase = computed(() => {
   if (xs.length <= 1) return { list: xs.join(''), noun: 'ifadesinin' }
   return { list: xs.slice(0, -1).join(', ') + ' ve ' + xs[xs.length - 1], noun: 'ifadelerinin' }
 })
+
+// "Kitleyi gör" drawer: lists the current (possibly unsaved) rule's audience.
+const showAudience = ref(false)
 
 const refineBusy = ref(false)
 const refineError = ref<unknown>(null)
@@ -354,6 +358,15 @@ async function acceptProposal() {
             <div class="card-head">
               <span class="card-icon teal"><Icon name="users" :size="17" /></span>
               <h2>Kitle<span class="sub">Canlı önizleme</span></h2>
+              <button
+                type="button"
+                class="btn btn-sm btn-soft"
+                :disabled="hasErrors || livePreview.total === 0"
+                :title="hasErrors ? 'Önce kuraldaki hataları düzeltin' : 'Kurala uyan tüm kişileri listele'"
+                @click="showAudience = true"
+              >
+                <Icon name="list" :size="14" /> Kitleyi gör
+              </button>
             </div>
             <div class="card-body stack">
               <AudienceStats :preview="livePreview" :stale="hasErrors" :loading="previewLoading" />
@@ -367,6 +380,8 @@ async function acceptProposal() {
         <span class="alert-icon">!</span>
         <div class="alert-body">{{ errorText(saveError) }}</div>
       </div>
+
+      <AudienceDrawer v-if="showAudience && draft" :rule="draft" @close="showAudience = false" />
 
       <div class="footer-bar">
         <span v-if="audienceEmpty" class="muted small">Kitle boş — içerik üretmek için önce kişi seçen bir koşul ekleyin.</span>

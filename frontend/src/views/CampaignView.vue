@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import CampaignName from '../components/CampaignName.vue'
 import Icon from '../components/Icon.vue'
+import MessageTable from '../components/MessageTable.vue'
 import StatusBoard from '../components/StatusBoard.vue'
 import Stepper from '../components/Stepper.vue'
 import { FLOW_STEPS } from '../lib/steps'
 import { errorText } from '../lib/errors'
 import { dateTime } from '../lib/format'
 import { describeRule } from '../lib/rule'
-import type { Campaign, CampaignStatus } from '../types'
+import type { Campaign, CampaignStatus, StatusReport } from '../types'
 
 const props = defineProps<{ id: string }>()
 const campaign = ref<Campaign | null>(null)
 const error = ref('')
+const report = ref<StatusReport | null>(null)
 
 onMounted(async () => {
   try {
@@ -38,14 +41,14 @@ function onStatus(s: CampaignStatus) {
   <div v-else-if="!campaign" class="row muted"><span class="spinner" /> Yükleniyor…</div>
   <template v-else>
     <div class="page-head">
-      <div style="max-width: 820px">
+      <div style="min-width: 0; max-width: 820px">
         <div class="page-eyebrow">
           <RouterLink to="/"><Icon name="arrow-left" :size="13" /> Kampanyalar</RouterLink>
           <span>/</span>
-          <span class="mono">{{ campaign.id.slice(0, 8) }}</span>
+          <span>Gönderim durumu</span>
           <span v-if="campaign.llm_provider === 'mock'" class="badge badge-mock" title="Kitle ve içerik mock LLM ile üretildi, Claude ile değil">MOCK</span>
         </div>
-        <h1>Gönderim durumu</h1>
+        <CampaignName :campaign="campaign" @renamed="campaign = { ...campaign, name: $event.name }" />
         <p class="brief-line">{{ campaign.brief }}</p>
         <div class="meta">
           <span><Icon name="clock" :size="13" /> Onay: {{ dateTime(campaign.approved_at) }}</span>
@@ -63,7 +66,10 @@ function onStatus(s: CampaignStatus) {
       :current-index="campaign.status === 'completed' ? sendIndex + 1 : sendIndex"
       :reachable="notReachable"
     />
-    <StatusBoard :campaign-id="campaign.id" @status="onStatus" />
+    <div class="stack">
+      <StatusBoard :campaign-id="campaign.id" @status="onStatus" @report="report = $event" />
+      <MessageTable v-if="campaign.approved_at || report?.campaign_status === 'sending' || report?.campaign_status === 'completed'" :campaign-id="campaign.id" :report="report" />
+    </div>
   </template>
 </template>
 

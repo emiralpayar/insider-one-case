@@ -5,12 +5,13 @@ import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
 import { api } from '../api'
 import { errorText } from '../lib/errors'
 import { CAMPAIGN_STATUS, CHANNEL_LABEL, num, pct, time } from '../lib/format'
+import { MESSAGE_STATUS_LABEL, MESSAGE_STATUSES } from '../lib/lists'
 import { freshRows, humanReason, outcomeText, prependRow, revealDelay, type LogRow } from '../lib/log'
 import type { CampaignStatus, ChannelStatus, MessageError, StatusReport } from '../types'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ campaignId: string }>()
-const emit = defineEmits<{ status: [s: CampaignStatus] }>()
+const emit = defineEmits<{ status: [s: CampaignStatus]; report: [r: StatusReport] }>()
 
 const POLL_MS = 2000
 const report = ref<StatusReport | null>(null)
@@ -49,14 +50,7 @@ function mergeLog(incoming: MessageError[]) {
   revealNext()
 }
 
-const STATUSES = [
-  { key: 'sent', label: 'Gönderildi', tip: 'Provider kabul etti' },
-  { key: 'sending', label: 'Gönderiliyor', tip: 'Şu an bir worker tarafından işleniyor' },
-  { key: 'queued', label: 'Kuyrukta', tip: 'Sırasını bekliyor (yeniden deneme dahil)' },
-  { key: 'failed', label: 'Başarısız', tip: 'Kalıcı hata ya da deneme hakkı bitti' },
-  { key: 'unknown', label: 'Belirsiz', tip: 'Gönderilmiş olabilir; çift gönderim riskine karşı tekrar denenmedi' },
-  { key: 'skipped_no_consent', label: 'İzin yok, atlandı', tip: 'Gönderimden hemen önce kullanıcının izni kalkmış' },
-] as const
+const STATUSES = MESSAGE_STATUSES
 
 async function poll() {
   clearTimeout(timer)
@@ -69,6 +63,7 @@ async function poll() {
     error.value = ''
     updatedAt.value = new Date()
     emit('status', r.campaign_status)
+    emit('report', r)
     if (r.campaign_status === 'completed') return // final: stop polling
   } catch (e) {
     error.value = errorText(e)
@@ -120,7 +115,7 @@ const problems = computed(() => {
   }
   return { failed, unknown }
 })
-const STATUS_LABEL = Object.fromEntries(STATUSES.map((s) => [s.key, s.label])) as Record<string, string>
+const STATUS_LABEL = MESSAGE_STATUS_LABEL
 </script>
 
 <template>
