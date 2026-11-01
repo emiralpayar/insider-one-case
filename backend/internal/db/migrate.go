@@ -14,6 +14,16 @@ var migrations embed.FS
 
 // Migrate applies all pending migrations.
 func Migrate(ctx context.Context, url string) error {
+	return withGoose(url, func(sqlDB *sql.DB) error { return goose.UpContext(ctx, sqlDB, "migrations") })
+}
+
+// MigrateDownTo rolls back every migration newer than version (used by tests
+// that check a migration's backfill).
+func MigrateDownTo(ctx context.Context, url string, version int64) error {
+	return withGoose(url, func(sqlDB *sql.DB) error { return goose.DownToContext(ctx, sqlDB, "migrations", version) })
+}
+
+func withGoose(url string, fn func(*sql.DB) error) error {
 	sqlDB, err := sql.Open("pgx", url)
 	if err != nil {
 		return err
@@ -23,5 +33,5 @@ func Migrate(ctx context.Context, url string) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	return goose.UpContext(ctx, sqlDB, "migrations")
+	return fn(sqlDB)
 }

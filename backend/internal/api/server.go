@@ -95,6 +95,7 @@ func New(cfg Config) *Server {
 		r.Get("/campaigns", s.listCampaigns)
 		r.Route("/campaigns/{id}", func(r chi.Router) {
 			r.Get("/", s.getCampaign)
+			r.Put("/name", s.putName)
 			r.Post("/segment/generate", s.generateSegment)
 			r.Post("/segment/refine", s.refineSegment)
 			r.Put("/segment", s.putSegment)
