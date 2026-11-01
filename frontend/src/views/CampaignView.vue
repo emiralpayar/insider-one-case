@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import Icon from '../components/Icon.vue'
 import StatusBoard from '../components/StatusBoard.vue'
+import Stepper from '../components/Stepper.vue'
+import { FLOW_STEPS } from '../lib/steps'
 import { errorText } from '../lib/errors'
 import { dateTime } from '../lib/format'
 import { describeRule } from '../lib/rule'
@@ -19,6 +22,9 @@ onMounted(async () => {
   }
 })
 
+const sendIndex = FLOW_STEPS.length - 1
+const notReachable = () => false
+
 function onStatus(s: CampaignStatus) {
   if (campaign.value) campaign.value.status = s
 }
@@ -32,21 +38,37 @@ function onStatus(s: CampaignStatus) {
   <div v-else-if="!campaign" class="row muted"><span class="spinner" /> Yükleniyor…</div>
   <template v-else>
     <div class="page-head">
-      <div style="max-width: 760px">
-        <div class="row" style="gap: 8px; margin-bottom: 6px">
-          <RouterLink to="/" class="small">← Kampanyalar</RouterLink>
+      <div style="max-width: 820px">
+        <div class="page-eyebrow">
+          <RouterLink to="/"><Icon name="arrow-left" :size="13" /> Kampanyalar</RouterLink>
+          <span>/</span>
+          <span class="mono">{{ campaign.id.slice(0, 8) }}</span>
           <span v-if="campaign.llm_provider === 'mock'" class="badge badge-mock" title="Kitle ve içerik mock LLM ile üretildi, Claude ile değil">MOCK</span>
         </div>
         <h1>Gönderim durumu</h1>
-        <p>{{ campaign.brief }}</p>
-        <p class="muted small" style="margin-top: 6px">
-          Onay: {{ dateTime(campaign.approved_at) }} · Kitle: {{ campaign.rule ? describeRule(campaign.rule).join(' · ') : '—' }}
-        </p>
+        <p class="brief-line">{{ campaign.brief }}</p>
+        <div class="meta">
+          <span><Icon name="clock" :size="13" /> Onay: {{ dateTime(campaign.approved_at) }}</span>
+          <span><Icon name="filter" :size="13" /> Kitle: {{ campaign.rule ? describeRule(campaign.rule).join(' · ') : '—' }}</span>
+        </div>
       </div>
       <RouterLink v-if="campaign.status !== 'sending' && campaign.status !== 'completed'" :to="`/campaigns/${campaign.id}/edit`" class="btn">
         Düzenlemeye dön
       </RouterLink>
     </div>
+    <Stepper
+      v-if="campaign.status === 'sending' || campaign.status === 'completed'"
+      :steps="FLOW_STEPS"
+      current="send"
+      :current-index="campaign.status === 'completed' ? sendIndex + 1 : sendIndex"
+      :reachable="notReachable"
+    />
     <StatusBoard :campaign-id="campaign.id" @status="onStatus" />
   </template>
 </template>
+
+<style scoped>
+.brief-line { font-size: 15px; color: var(--text-2); }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12.5px; color: var(--text-3); }
+.meta span { display: inline-flex; align-items: center; gap: 6px; }
+</style>

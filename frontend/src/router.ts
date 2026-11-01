@@ -12,4 +12,7 @@ export const router = createRouter({
     { path: '/campaigns/:id', name: 'campaign', component: CampaignView, props: true },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
+  // Every navigation (including the composer's ?step= changes) starts at the
+  // top; back/forward restores the saved position.
+  scrollBehavior: (_to, _from, saved) => saved ?? { top: 0 },
 })

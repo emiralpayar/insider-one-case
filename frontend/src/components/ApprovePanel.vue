@@ -9,6 +9,7 @@ import { num, pct } from '../lib/format'
 import { WORST_CASE_FIRST_NAME, describeRule, worstCaseCity } from '../lib/rule'
 import { render, smsStats } from '../lib/sms'
 import type { Campaign, Channel, PreviewResult } from '../types'
+import Icon from './Icon.vue'
 import MessagePreview from './MessagePreview.vue'
 import WarningList from './WarningList.vue'
 
@@ -101,75 +102,115 @@ async function approve() {
 
 <template>
   <section class="stack">
+    <div class="stats stats-4" :class="{ stale: refreshing }">
+      <div class="stat">
+        <div class="stat-head"><span class="stat-icon" :class="isEmpty ? 'red' : ''"><Icon name="target" :size="15" /></span><span class="stat-label">Kitle</span></div>
+        <div class="stat-value" :style="isEmpty ? 'color: var(--danger)' : ''">{{ pv ? num(pv.total) : '—' }}<span class="unit">kişi</span></div>
+        <div class="stat-sub">{{ pv ? `${pct(pv.total, pv.all_users)} / ${num(pv.all_users)} kullanıcı` : 'yükleniyor' }}</div>
+      </div>
+      <div class="stat" :class="{ 'stat-off': !enabled('sms') }">
+        <div class="stat-head"><span class="stat-icon violet"><Icon name="sms" :size="14" /></span><span class="stat-label">SMS alıcısı</span></div>
+        <div class="stat-value">{{ pv && enabled('sms') ? num(pv.sms_eligible) : '—' }}</div>
+        <div class="stat-sub">{{ enabled('sms') ? (smsSegments > 1 ? `mesaj başına ${smsSegments} parça` : 'izinli alıcı') : 'kanal kapalı' }}</div>
+      </div>
+      <div class="stat" :class="{ 'stat-off': !enabled('email') }">
+        <div class="stat-head"><span class="stat-icon teal"><Icon name="mail" :size="14" /></span><span class="stat-label">E-posta alıcısı</span></div>
+        <div class="stat-value">{{ pv && enabled('email') ? num(pv.email_eligible) : '—' }}</div>
+        <div class="stat-sub">{{ enabled('email') ? 'izinli alıcı' : 'kanal kapalı' }}</div>
+      </div>
+      <div class="stat stat-accent">
+        <div class="stat-head"><span class="stat-icon green"><Icon name="send" :size="14" /></span><span class="stat-label">Kuyruğa alınacak</span></div>
+        <div class="stat-value">{{ num(recipients) }}<span class="unit">mesaj</span></div>
+        <div class="stat-sub">kanal başına ≤ 100 mesaj/sn</div>
+      </div>
+    </div>
+
     <div class="grid-2" style="align-items: start">
-      <div class="card stack">
-        <div class="card-title" style="margin: 0">
-          <h2>Kitle</h2>
-          <button class="btn btn-ghost btn-sm" type="button" @click="emit('go', 'audience')">Düzenle</button>
+      <div class="card card-flush">
+        <div class="card-head">
+          <span class="card-icon"><Icon name="filter" :size="17" /></span>
+          <h2>Kitle kuralı</h2>
+          <button class="btn btn-ghost btn-sm" type="button" @click="emit('go', 'audience')"><Icon name="edit" :size="13" /> Düzenle</button>
         </div>
-        <p v-if="campaign.rule?.explanation" class="small">
-          <span class="muted">Claude'un yorumu:</span> {{ campaign.rule.explanation }}
-        </p>
-        <p v-else-if="campaign.rule" class="small muted">Kural elle düzenlendi.</p>
-        <ul class="rule-lines">
-          <li v-for="l in campaign.rule ? describeRule(campaign.rule) : []" :key="l">{{ l }}</li>
-        </ul>
-        <div v-if="pv" class="small" :class="{ stale: refreshing }">
-          <strong>{{ num(pv.total) }}</strong> kişi ({{ pct(pv.total, pv.all_users) }} / {{ num(pv.all_users) }} kullanıcı)
+        <div class="card-body stack-sm">
+          <p v-if="campaign.rule?.explanation" class="small">
+            <span class="muted">Claude'un yorumu:</span> {{ campaign.rule.explanation }}
+          </p>
+          <p v-else-if="campaign.rule" class="small muted">Kural elle düzenlendi.</p>
+          <ul class="rule-lines">
+            <li v-for="l in campaign.rule ? describeRule(campaign.rule) : []" :key="l"><Icon name="check" :size="13" :stroke="2.5" /> {{ l }}</li>
+          </ul>
         </div>
       </div>
 
-      <div class="card stack">
-        <div class="card-title" style="margin: 0"><h2>Kanallar ve alıcılar</h2></div>
-        <div v-for="ch in (['sms', 'email'] as Channel[])" :key="ch" class="channel-row">
-          <label class="checkbox">
-            <input
-              type="checkbox"
-              :checked="enabled(ch)"
-              :disabled="channelBusy || (enabled(ch) && campaign.channels.length === 1)"
-              @change="toggle(ch, ($event.target as HTMLInputElement).checked)"
-            />
-            <span>
+      <div class="card card-flush">
+        <div class="card-head">
+          <span class="card-icon teal"><Icon name="layers" :size="17" /></span>
+          <h2>Kanallar ve alıcılar</h2>
+        </div>
+        <div class="card-body stack-sm">
+          <div v-for="ch in (['sms', 'email'] as Channel[])" :key="ch" class="channel-row" :class="{ on: enabled(ch) }">
+            <span class="card-icon" :class="ch === 'sms' ? 'violet' : 'teal'"><Icon :name="ch === 'sms' ? 'sms' : 'mail'" :size="16" /></span>
+            <span style="flex: 1; min-width: 0">
               <strong>{{ ch === 'sms' ? 'SMS' : 'E-posta' }}</strong>
               <span v-if="pv" class="muted small" style="display: block">
                 {{ num(ch === 'sms' ? pv.sms_eligible : pv.email_eligible) }} izinli alıcı
                 <template v-if="ch === 'sms' && smsSegments > 1"> · mesaj başına {{ smsSegments }} parça</template>
               </span>
             </span>
-          </label>
-          <span v-if="enabled(ch) && missingContent.includes(ch)" class="badge badge-danger">İçerik yok</span>
-        </div>
-        <div v-if="campaign.channels.length === 1" class="muted small">En az bir kanal açık kalmalı.</div>
-        <div v-if="channelError" class="field-error">{{ errorText(channelError) }}</div>
-        <div v-if="missingContent.length" class="alert alert-danger">
-          <span class="alert-icon">!</span>
-          <div class="alert-body">
-            Açık kanal için içerik yok.
-            <button class="btn btn-sm" type="button" style="margin-left: 6px" @click="emit('go', 'content')">İçerik adımına dön</button>
+            <span v-if="enabled(ch) && missingContent.includes(ch)" class="badge badge-danger">İçerik yok</span>
+            <label class="switch" :title="enabled(ch) ? 'Kanalı kapat' : 'Kanalı aç'">
+              <input
+                type="checkbox"
+                :aria-label="(ch === 'sms' ? 'SMS' : 'E-posta') + ' kanalı'"
+                :checked="enabled(ch)"
+                :disabled="channelBusy || (enabled(ch) && campaign.channels.length === 1)"
+                @change="toggle(ch, ($event.target as HTMLInputElement).checked)"
+              />
+              <span class="switch-track" />
+            </label>
+          </div>
+          <div v-if="campaign.channels.length === 1" class="muted small">En az bir kanal açık kalmalı.</div>
+          <div v-if="channelError" class="field-error">{{ errorText(channelError) }}</div>
+          <div v-if="missingContent.length" class="alert alert-danger">
+            <span class="alert-icon">!</span>
+            <div class="alert-body">
+              Açık kanal için içerik yok.
+              <button class="btn btn-sm" type="button" style="margin-left: 6px" @click="emit('go', 'content')">İçerik adımına dön</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div v-if="pv" class="card stack">
-      <div class="card-title" style="margin: 0"><h2>Uyarılar</h2></div>
-      <WarningList v-if="pv.warnings.length" :preview="pv" :unmapped="campaign.rule?.unmapped ?? []" />
-      <p v-else class="muted">Uyarı yok.</p>
-    </div>
-
-    <div v-if="campaign.content" class="card">
-      <div class="card-title">
-        <h2>Gönderilecek mesajlar</h2>
-        <button class="btn btn-ghost btn-sm" type="button" @click="emit('go', 'content')">Düzenle</button>
+    <div v-if="pv" class="card card-flush">
+      <div class="card-head">
+        <span class="card-icon" :class="pv.warnings.length ? 'amber' : 'green'"><Icon :name="pv.warnings.length ? 'alert' : 'shield'" :size="17" /></span>
+        <h2>Uyarılar</h2>
+        <span v-if="!pv.warnings.length" class="badge badge-success">Temiz</span>
       </div>
-      <MessagePreview
-        :content="campaign.content"
-        :sample="pv?.sample.find((u) => u.first_name) ?? pv?.sample[0] ?? null"
-        :channels="campaign.channels"
-      />
+      <div class="card-body">
+        <WarningList v-if="pv.warnings.length" :preview="pv" :unmapped="campaign.rule?.unmapped ?? []" />
+        <p v-else class="muted">Uyarı yok — kitle ve içerik kontrollerinden geçti.</p>
+      </div>
     </div>
 
-    <div class="card stack approve-box">
+    <div v-if="campaign.content" class="card card-flush">
+      <div class="card-head">
+        <span class="card-icon slate"><Icon name="eye" :size="17" /></span>
+        <h2>Gönderilecek mesajlar<span class="sub">Gerçek bir alıcıyla ve ismi boş bir alıcıyla</span></h2>
+        <button class="btn btn-ghost btn-sm" type="button" @click="emit('go', 'content')"><Icon name="edit" :size="13" /> Düzenle</button>
+      </div>
+      <div class="card-body">
+        <MessagePreview
+          :content="campaign.content"
+          :sample="pv?.sample.find((u) => u.first_name) ?? pv?.sample[0] ?? null"
+          :channels="campaign.channels"
+        />
+      </div>
+    </div>
+
+    <div class="card stack approve-box" :class="{ blocked: !!blockReason }">
       <label v-if="isLarge" class="checkbox large-confirm">
         <input v-model="confirmLarge" type="checkbox" />
         <span>
@@ -187,13 +228,16 @@ async function approve() {
         </div>
       </div>
       <div class="row-between">
-        <div>
-          <div><strong>{{ num(recipients) }}</strong> mesaj kuyruğa alınacak</div>
-          <div v-if="blockReason" class="small" style="color: var(--danger)">{{ blockReason }}</div>
-          <div v-else class="muted small">Onaydan sonra kampanya düzenlenemez.</div>
+        <div class="row" style="gap: 14px; flex-wrap: nowrap">
+          <span class="card-icon" :class="blockReason ? 'red' : 'green'"><Icon :name="blockReason ? 'x-circle' : 'send'" :size="18" /></span>
+          <div>
+            <div style="font-size: 15px"><strong>{{ num(recipients) }}</strong> mesaj kuyruğa alınacak</div>
+            <div v-if="blockReason" class="small" style="color: var(--danger)">{{ blockReason }}</div>
+            <div v-else class="muted small">Onaydan sonra kampanya düzenlenemez.</div>
+          </div>
         </div>
         <button class="btn btn-primary btn-lg" type="button" :disabled="!!blockReason || approving" @click="approve">
-          <span v-if="approving" class="spinner" /> Onayla ve gönder
+          <span v-if="approving" class="spinner" /><Icon v-else name="send" :size="16" /> Onayla ve gönder
         </button>
       </div>
     </div>
@@ -201,8 +245,15 @@ async function approve() {
 </template>
 
 <style scoped>
-.rule-lines { margin: 0; padding-left: 18px; }
-.channel-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.approve-box { border-color: var(--border-strong); }
-.large-confirm { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--warn-soft); border: 1px solid var(--warn-border); color: #6b4300; }
+.rule-lines { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.rule-lines li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-xs); font-weight: 500; }
+.rule-lines li .icon { color: var(--success); }
+.channel-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); transition: border-color 0.12s, background 0.12s; }
+.channel-row.on { background: var(--surface); border-color: var(--accent-border); }
+.channel-row .card-icon { width: 30px; height: 30px; }
+.stat-off { opacity: 0.55; }
+.stat-accent { border-color: var(--success-border); background: linear-gradient(180deg, #fff, var(--success-soft)); }
+.approve-box { border: 1px solid var(--accent-border); box-shadow: var(--shadow-md); background: linear-gradient(180deg, #fff, #fafaff); }
+.approve-box.blocked { border-color: var(--danger-border); background: linear-gradient(180deg, #fff, #fffafa); }
+.large-confirm { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text); }
 </style>

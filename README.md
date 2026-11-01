@@ -28,7 +28,7 @@ docker compose up --build
 - **Key yoksa:** sistem yine ayağa kalkar, ama LLM endpoint'leri `503 llm_not_configured` döner ve arayüzde kırmızı uyarı bandı görünür. Sistem kendiliğinden mock'a **düşmez**.
 - **Key'siz demo:** `LLM_PROVIDER=mock docker compose up` (veya `.env` içinde `LLM_PROVIDER=mock`). Deterministik, anahtar kelime tabanlı fixture'lar çalışır; arayüzde kalıcı turuncu **MOCK MOD** bandı çıkar ve kampanyalar `llm_provider='mock'` olarak işaretlenir.
 
-Hızlı kontrol: arayüzde örnek brief'i ("Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun.") girip kitle → içerik → onay adımlarını izleyin. Mock modda bu kampanya 648 kişilik kitleye 1.091 mesaj (541 SMS + 550 email) üretir; varsayılan hata oranlarıyla ≈40 sn'de `completed` olur, retry'lar dashboard'un "Son hatalar" kartında görünür ve `curl localhost:8081/v1/stats` → `"max_deliveries_per_recipient_message": 1`.
+Hızlı kontrol: arayüzde örnek brief'i ("Son 30 günde sepetine ürün ekleyip alışveriş yapmayan İstanbul'daki kullanıcılara %30 indirim hatırlatması gönder. Samimi ama kısa olsun.") girip kitle → içerik → onay adımlarını izleyin. Mock modda bu kampanya 648 kişilik kitleye 1.091 mesaj (541 SMS + 550 email) üretir; varsayılan hata oranlarıyla ≈40 sn'de `completed` olur, retry'lar dashboard'un "Gönderim günlüğü" kartında görünür ve `curl localhost:8081/v1/stats` → `"max_deliveries_per_recipient_message": 1`.
 
 `make up` aynı şeyi arka planda yapar ve tüm servisler sağlıklı olunca döner. Kapatmak için: `docker compose down -v` (veya `make down`) (`-v` veritabanı volume'unu da siler; bir sonraki açılışta seed yeniden yüklenir).
 
@@ -40,7 +40,7 @@ Hızlı kontrol: arayüzde örnek brief'i ("Son 30 günde sepetine ürün ekleyi
 | 2. İçerik | SMS ve email (konu, preheader, gövde) SSE ile alan alan akar. Kanal bazında yeniden üretim var. | SMS ≤ 160, konu ≤ 80 karakter; uzunluk kitledeki **en uzun** isim/şehirle ve **boş** isimle render edilerek ölçülür. Yalnızca `{{first_name}}`, `{{city}}` değişkenleri kabul edilir. GSM-7 dışı karakterde UCS-2 parça sayısı uyarısı gösterilir. |
 | 3. Onay | Pazarlamacı önizler (gerçek bir alıcıyla ve isimsiz render), gerekirse düzenler, kanal kapatabilir, onaylar. | Onay anında kural ve içerik backend'de yeniden doğrulanır. Tek transaction'da yalnızca **o kanalda izni olan** kullanıcılar için mesaj satırları yazılır, içerik alıcı başına render edilip saklanır. `UNIQUE (campaign_id, user_id, channel)` sayesinde çift tıklama çift mesaj üretmez. |
 | 4. Gönderim | Worker'lar kuyruktan iş alır, mock provider'a gönderir, hataları sınıflandırıp yeniden dener. | Kanal başına ≤ 100 msg/sn (birden çok worker olsa bile). Aynı kişiye aynı mesaj iki kez gitmez (idempotency key). İzin göndermeden hemen önce tekrar okunur. |
-| 5. Canlı izleme | Dashboard ≈2 sn'de bir durum endpoint'ini sorgular: kanal bazında ilerleme, durum dağılımı, saniyelik hız, son hatalar. | Retry'dan sonra gönderilen mesajlar da hata geçmişiyle ve güncel durumlarıyla (`sent`) "Son hatalar"da görünür; `unknown` mesajlar ayrıca açıklanır. |
+| 5. Canlı izleme | Dashboard ≈2 sn'de bir durum endpoint'ini sorgular: kanal bazında ilerleme, durum dağılımı, saniyelik hız, gönderim günlüğü (yeniden denemeler ve hatalar). | Retry'dan sonra gönderilen mesajlar da hata geçmişiyle ve güncel durumlarıyla (`sent`) "Gönderim günlüğü"nde görünür; `unknown` mesajlar ayrıca açıklanır. |
 
 ## Mimari
 
@@ -116,7 +116,7 @@ CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race
 - `GET /healthz` (liveness) ve `GET /readyz` (DB erişimi; `llm: ok|mock|not_configured` bilgisi) — api'de. Worker'larda `/healthz` DB'ye ping atar.
 - `GET /metrics` (Prometheus) hem api'de (LLM çağrı sayısı/gecikmesi/doğrulama hatası/onarım) hem her worker'da (`composer_messages_total{channel,outcome}`, provider gecikme histogramı, 429 sayacı, limiter'ın o anki izinli hızı `composer_send_rate`; seriler yalnızca o kanalın lideri olan replikada dolar).
 - `GET /api/config`: `{llm_provider, llm_configured, models}` — arayüzdeki bantlar buradan.
-- `GET /api/campaigns/{id}/status`: durum başına sayılar, kanal kırılımı, 10 sn'lik hız, son 10 hata.
+- `GET /api/campaigns/{id}/status`: durum başına sayılar, kanal kırılımı, 10 sn'lik hız, son 50 hatalı mesaj.
 - `llm_calls` tablosu: her Claude çağrısının girdisi, ham çıktısı ve doğrulama hataları.
 - Worker logları kanal liderliğinin hangi replikada olduğunu yazar (`acquired channel leadership`).
 

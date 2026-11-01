@@ -13,6 +13,8 @@ import type { Campaign, Channel, Content, PreviewResult, VError } from '../types
 import LengthMeter from './LengthMeter.vue'
 import MessagePreview from './MessagePreview.vue'
 import SmsMeter from './SmsMeter.vue'
+import Icon from './Icon.vue'
+import VarEditor from './VarEditor.vue'
 
 const props = defineProps<{ campaign: Campaign; preview: PreviewResult | null }>()
 const emit = defineEmits<{ saved: [c: Content]; dirty: [d: boolean]; back: []; next: []; locked: [] }>()
@@ -121,27 +123,30 @@ const generalSaveError = computed(() => saveError.value && Object.keys(errorsByP
   <section class="stack">
     <!-- first generation -->
     <div v-if="!hasSaved && !streaming && !manual && !draft.sms && !draft.email.subject" class="card empty-state">
+      <div class="empty-art"><Icon name="sparkles" :size="30" /></div>
       <h2>Mesajları Claude yazsın</h2>
-      <p class="muted">
+      <p class="muted" style="max-width: 520px; margin: 0 auto">
         {{ channels.map((c) => (c === 'sms' ? 'SMS' : 'e-posta')).join(' ve ') }} içeriği brief'e ve kitleye göre üretilir,
         canlı olarak burada belirir ve kanal limitlerine göre doğrulanır.
       </p>
-      <p style="margin-top: 16px">
-        <button class="btn btn-primary btn-lg" type="button" :disabled="llmOff" @click="generate('all')">✦ Claude ile içerik üret</button>
+      <p style="margin-top: 20px">
+        <button class="btn btn-primary btn-lg" type="button" :disabled="llmOff" @click="generate('all')">
+          <Icon name="sparkles" :size="16" /> Claude ile içerik üret
+        </button>
       </p>
       <p style="margin-top: 8px">
         <button class="btn btn-ghost btn-sm" type="button" @click="manual = true">ya da içeriği elle yazın</button>
       </p>
-      <p v-if="llmOff" class="field-error" style="margin-top: 8px">Claude API anahtarı tanımlı değil — içerik üretilemez.</p>
+      <p v-if="llmOff" class="field-error" style="margin-top: 8px; justify-content: center">Claude API anahtarı tanımlı değil — içerik üretilemez.</p>
     </div>
 
     <template v-else>
       <!-- stream status -->
-      <div v-if="streaming" class="alert alert-info" role="status">
-        <span class="spinner" />
+      <div v-if="streaming" class="alert alert-info stream-alert" role="status">
+        <span class="spinner" style="margin-top: 2px" />
         <div class="alert-body">
           <strong>Claude yazıyor…</strong>
-          <span class="muted">({{ streaming === 'all' ? 'tüm kanallar' : streaming === 'sms' ? 'yalnızca SMS' : 'yalnızca e-posta' }})</span>
+          <span class="muted"> ({{ streaming === 'all' ? 'tüm kanallar' : streaming === 'sms' ? 'yalnızca SMS' : 'yalnızca e-posta' }})</span>
           <div v-if="repairs.length" class="repair">Claude düzeltiyor: {{ repairs.join(' · ') }}</div>
         </div>
       </div>
@@ -167,55 +172,94 @@ const generalSaveError = computed(() => saveError.value && Object.keys(errorsByP
 
       <div class="grid-2 editors">
         <!-- SMS -->
-        <div class="card stack" :class="{ off: !has('sms') }">
-          <div class="card-title" style="margin: 0">
-            <h2>SMS</h2>
+        <div class="card card-flush" :class="{ off: !has('sms') }">
+          <div class="card-head">
+            <span class="card-icon violet"><Icon name="sms" :size="17" /></span>
+            <h2>SMS<span class="sub">En fazla 160 karakter (en kötü durum)</span></h2>
             <span v-if="!has('sms')" class="badge">Kanal kapalı</span>
             <button v-else class="btn btn-sm" type="button" :disabled="!!streaming || !hasSaved || llmOff" title="Yalnızca SMS'i yeniden üret" @click="generate('sms')">
-              <span v-if="streaming === 'sms'" class="spinner" /> ↻ Yeniden üret
+              <span v-if="streaming === 'sms'" class="spinner" style="width: 13px; height: 13px" /><Icon v-else name="refresh" :size="14" /> Yeniden üret
             </button>
           </div>
-          <div class="field" :class="{ 'has-error': fieldErrors('sms', draft.sms).length }">
-            <textarea v-model="draft.sms" class="textarea" rows="5" :readonly="!!streaming" aria-label="SMS metni" />
-            <div v-for="m in fieldErrors('sms', draft.sms)" :key="m" class="field-error">{{ m }}</div>
+          <div class="card-body stack">
+            <div class="field" :class="{ 'has-error': fieldErrors('sms', draft.sms).length }">
+              <VarEditor
+                v-model="draft.sms"
+                multiline
+                :rows="4"
+                :readonly="!!streaming"
+                :invalid="fieldErrors('sms', draft.sms).length > 0"
+                label="SMS metni"
+                placeholder-text="SMS metnini yazın…"
+              />
+              <div v-for="m in fieldErrors('sms', draft.sms)" :key="m" class="field-error">{{ m }}</div>
+            </div>
+            <SmsMeter :text="draft.sms" :longest="longest" :recipients="has('sms') ? preview?.sms_eligible ?? 0 : 0" />
           </div>
-          <SmsMeter :text="draft.sms" :longest="longest" :recipients="has('sms') ? preview?.sms_eligible ?? 0 : 0" />
         </div>
 
         <!-- Email -->
-        <div class="card stack" :class="{ off: !has('email') }">
-          <div class="card-title" style="margin: 0">
-            <h2>E-posta</h2>
+        <div class="card card-flush" :class="{ off: !has('email') }">
+          <div class="card-head">
+            <span class="card-icon teal"><Icon name="mail" :size="17" /></span>
+            <h2>E-posta<span class="sub">Konu en fazla 80 karakter</span></h2>
             <span v-if="!has('email')" class="badge">Kanal kapalı</span>
             <button v-else class="btn btn-sm" type="button" :disabled="!!streaming || !hasSaved || llmOff" title="Yalnızca e-postayı yeniden üret" @click="generate('email')">
-              <span v-if="streaming === 'email'" class="spinner" /> ↻ Yeniden üret
+              <span v-if="streaming === 'email'" class="spinner" style="width: 13px; height: 13px" /><Icon v-else name="refresh" :size="14" /> Yeniden üret
             </button>
           </div>
-          <div class="field" :class="{ 'has-error': fieldErrors('email.subject', draft.email.subject).length }">
-            <label class="field-label" for="subject">Konu</label>
-            <input id="subject" v-model="draft.email.subject" class="input" :readonly="!!streaming" />
-            <div v-for="m in fieldErrors('email.subject', draft.email.subject)" :key="m" class="field-error">{{ m }}</div>
-            <LengthMeter :length="subjectLen" :limit="80" />
-          </div>
-          <div class="field" :class="{ 'has-error': fieldErrors('email.preheader', draft.email.preheader).length }">
-            <label class="field-label" for="preheader">Ön başlık <span class="muted small">(isteğe bağlı)</span></label>
-            <input id="preheader" v-model="draft.email.preheader" class="input" :readonly="!!streaming" />
-            <div v-for="m in fieldErrors('email.preheader', draft.email.preheader)" :key="m" class="field-error">{{ m }}</div>
-          </div>
-          <div class="field" :class="{ 'has-error': fieldErrors('email.body', draft.email.body).length }">
-            <label class="field-label" for="body">Gövde</label>
-            <textarea id="body" v-model="draft.email.body" class="textarea" rows="7" :readonly="!!streaming" />
-            <div v-for="m in fieldErrors('email.body', draft.email.body)" :key="m" class="field-error">{{ m }}</div>
+          <div class="card-body stack">
+            <div class="field" :class="{ 'has-error': fieldErrors('email.subject', draft.email.subject).length }">
+              <span class="field-label">Konu</span>
+              <VarEditor
+                id="subject"
+                v-model="draft.email.subject"
+                :readonly="!!streaming"
+                :invalid="fieldErrors('email.subject', draft.email.subject).length > 0"
+                label="E-posta konusu"
+                placeholder-text="Konu satırı"
+              />
+              <div v-for="m in fieldErrors('email.subject', draft.email.subject)" :key="m" class="field-error">{{ m }}</div>
+              <LengthMeter :length="subjectLen" :limit="80" />
+            </div>
+            <div class="field" :class="{ 'has-error': fieldErrors('email.preheader', draft.email.preheader).length }">
+              <span class="field-label">Ön başlık <span class="muted small" style="font-weight: 400">(isteğe bağlı)</span></span>
+              <VarEditor
+                id="preheader"
+                v-model="draft.email.preheader"
+                :readonly="!!streaming"
+                :invalid="fieldErrors('email.preheader', draft.email.preheader).length > 0"
+                label="E-posta ön başlığı"
+                placeholder-text="Gelen kutusunda konunun yanında görünen kısa metin"
+              />
+              <div v-for="m in fieldErrors('email.preheader', draft.email.preheader)" :key="m" class="field-error">{{ m }}</div>
+            </div>
+            <div class="field" :class="{ 'has-error': fieldErrors('email.body', draft.email.body).length }">
+              <span class="field-label">Gövde</span>
+              <VarEditor
+                id="body"
+                v-model="draft.email.body"
+                multiline
+                :rows="7"
+                :readonly="!!streaming"
+                :invalid="fieldErrors('email.body', draft.email.body).length > 0"
+                label="E-posta gövdesi"
+                placeholder-text="E-posta metni"
+              />
+              <div v-for="m in fieldErrors('email.body', draft.email.body)" :key="m" class="field-error">{{ m }}</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-title">
-          <h2>Önizleme</h2>
-          <span class="muted small">Gerçek bir alıcıyla ve ismi boş bir alıcıyla</span>
+      <div class="card card-flush">
+        <div class="card-head">
+          <span class="card-icon slate"><Icon name="eye" :size="17" /></span>
+          <h2>Önizleme<span class="sub">Gerçek bir alıcıyla ve ismi boş bir alıcıyla nasıl görüneceği</span></h2>
         </div>
-        <MessagePreview :content="draft" :sample="sample" :channels="channels" :streaming="!!streaming" />
+        <div class="card-body">
+          <MessagePreview :content="draft" :sample="sample" :channels="channels" :streaming="!!streaming" />
+        </div>
       </div>
 
       <div v-if="generalSaveError" class="alert alert-danger">
@@ -224,13 +268,13 @@ const generalSaveError = computed(() => saveError.value && Object.keys(errorsByP
       </div>
 
       <div class="footer-bar">
-        <button class="btn" type="button" :disabled="!!streaming" @click="emit('back')">← Kitle</button>
+        <button class="btn" type="button" :disabled="!!streaming" @click="emit('back')"><Icon name="arrow-left" :size="15" /> Kitle</button>
         <div class="row">
-          <span v-if="dirty || unsavedFromClaude" class="badge badge-warn">Kaydedilmemiş değişiklik</span>
-          <span v-else-if="savedAt" class="muted small">Kaydedildi · {{ savedAt.toLocaleTimeString('tr-TR') }}</span>
-          <button class="btn" type="button" :disabled="!!streaming || saving || !(dirty || unsavedFromClaude)" @click="save">Kaydet</button>
+          <span v-if="dirty || unsavedFromClaude" class="badge badge-warn badge-dot">Kaydedilmemiş değişiklik</span>
+          <span v-else-if="savedAt" class="muted small row" style="gap: 5px"><Icon name="check" :size="13" /> Kaydedildi · {{ savedAt.toLocaleTimeString('tr-TR') }}</span>
+          <button class="btn" type="button" :disabled="!!streaming || saving || !(dirty || unsavedFromClaude)" @click="save"><Icon name="save" :size="14" /> Kaydet</button>
           <button class="btn btn-primary btn-lg" type="button" :disabled="!!streaming || saving || (!hasSaved && !dirty && !unsavedFromClaude)" @click="next">
-            <span v-if="saving" class="spinner" /> Onaya geç →
+            <span v-if="saving" class="spinner" /> Onaya geç <Icon name="arrow-right" :size="16" />
           </button>
         </div>
       </div>
@@ -240,6 +284,7 @@ const generalSaveError = computed(() => saveError.value && Object.keys(errorsByP
 
 <style scoped>
 .off { opacity: 0.6; }
-.repair { margin-top: 4px; font-weight: 600; color: #8a5300; }
+.repair { margin-top: 4px; font-weight: 600; color: var(--warn); }
 .editors { align-items: start; }
+.stream-alert { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); }
 </style>

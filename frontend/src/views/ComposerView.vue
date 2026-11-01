@@ -1,18 +1,19 @@
 <script setup lang="ts">
 // Composer wizard: Brief → Kitle → İçerik → Onay. Holds the campaign and the
 // audience preview; each step component talks to the API and reports back.
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import BriefStep from '../components/BriefStep.vue'
 import RuleEditor from '../components/RuleEditor.vue'
 import ContentEditor from '../components/ContentEditor.vue'
 import ApprovePanel from '../components/ApprovePanel.vue'
+import Icon from '../components/Icon.vue'
+import Stepper from '../components/Stepper.vue'
+import { FLOW_STEPS, type Step } from '../lib/steps'
 import { errorText } from '../lib/errors'
 import { CAMPAIGN_STATUS } from '../lib/format'
 import type { Campaign, Content, PreviewResult, RuleResponse } from '../types'
-
-type Step = 'brief' | 'audience' | 'content' | 'approve'
 
 const props = defineProps<{ id?: string }>()
 const route = useRoute()
@@ -26,14 +27,7 @@ const creating = ref(false)
 const createError = ref<unknown>(null)
 const dirty = ref(false)
 
-const STEPS: { key: Step; title: string; sub: string }[] = [
-  { key: 'brief', title: 'Brief', sub: 'Ne göndermek istiyorsunuz?' },
-  { key: 'audience', title: 'Kitle', sub: 'Claude\'un kuralı ve kişi sayıları' },
-  { key: 'content', title: 'İçerik', sub: 'SMS ve e-posta' },
-  { key: 'approve', title: 'Onay', sub: 'Özet ve gönderim' },
-]
-
-function reachable(s: Step): boolean {
+function reachable(s: Step | string): boolean {
   const c = campaign.value
   switch (s) {
     case 'brief':
@@ -45,8 +39,16 @@ function reachable(s: Step): boolean {
     case 'approve':
       return !!c?.rule && !!c?.content
   }
+  return false // 'send': only by approving
 }
-const stepIndex = computed(() => STEPS.findIndex((s) => s.key === step.value))
+const stepIndex = computed(() => FLOW_STEPS.findIndex((s) => s.key === step.value))
+
+// Each step starts at the top of the page (e.g. "Onaya geç" clicked at the
+// bottom of the content step).
+watch(step, async () => {
+  await nextTick()
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+})
 
 function defaultStep(c: Campaign): Step {
   if (!c.rule) return 'audience'
@@ -54,7 +56,8 @@ function defaultStep(c: Campaign): Step {
   return 'approve'
 }
 
-function go(s: Step) {
+function go(target: Step | string) {
+  const s = target as Step
   if (!reachable(s) || s === step.value) return
   if (dirty.value && !window.confirm('Kaydedilmemiş değişiklikler var. Yine de adım değiştirilsin mi?')) return
   dirty.value = false
@@ -136,34 +139,24 @@ function onLocked() {
 <template>
   <div class="page-head">
     <div>
+      <div class="page-eyebrow">
+        <RouterLink to="/"><Icon name="arrow-left" :size="13" /> Kampanyalar</RouterLink>
+        <template v-if="campaign">
+          <span>/</span>
+          <span class="mono">{{ campaign.id.slice(0, 8) }}</span>
+        </template>
+      </div>
       <h1>{{ campaign ? 'Kampanyayı düzenle' : 'Yeni kampanya' }}</h1>
-      <p v-if="campaign" class="row" style="gap: 6px">
-        <span class="badge">{{ CAMPAIGN_STATUS[campaign.status] }}</span>
+      <p v-if="campaign" class="row" style="gap: 8px">
+        <span class="badge badge-dot" :class="'status-' + campaign.status">{{ CAMPAIGN_STATUS[campaign.status] }}</span>
         <span v-if="campaign.llm_provider === 'mock'" class="badge badge-mock">MOCK</span>
-        <span class="muted small mono">{{ campaign.id }}</span>
+        <span class="muted small mono" :title="campaign.id">{{ campaign.id }}</span>
       </p>
       <p v-else>Brief'inizi yazın; Claude kitleyi ve mesajları önersin, son kararı siz verin.</p>
     </div>
   </div>
 
-  <nav class="stepper" aria-label="Adımlar">
-    <button
-      v-for="(s, i) in STEPS"
-      :key="s.key"
-      type="button"
-      class="step"
-      :class="{ active: s.key === step, reachable: reachable(s.key) && s.key !== step, done: i < stepIndex }"
-      :disabled="!reachable(s.key)"
-      :aria-current="s.key === step ? 'step' : undefined"
-      @click="go(s.key)"
-    >
-      <span class="step-num">{{ i < stepIndex ? '✓' : i + 1 }}</span>
-      <span class="step-text">
-        <span class="step-title">{{ s.title }}</span>
-        <span class="step-sub">{{ s.sub }}</span>
-      </span>
-    </button>
-  </nav>
+  <Stepper :steps="FLOW_STEPS" :current="step" :current-index="stepIndex" :reachable="reachable" @go="go" />
 
   <div v-if="loadError" class="alert alert-danger">
     <span class="alert-icon">!</span>

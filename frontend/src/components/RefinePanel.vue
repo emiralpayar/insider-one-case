@@ -6,6 +6,7 @@ import { errorText } from '../lib/errors'
 import { num } from '../lib/format'
 import { describeRule } from '../lib/rule'
 import type { Rule, RuleResponse } from '../types'
+import Icon from './Icon.vue'
 
 const props = defineProps<{
   current: Rule
@@ -52,7 +53,13 @@ function accept() {
 
 <template>
   <div class="stack-sm">
-    <div class="section-label">Doğal dille düzelt</div>
+    <div class="refine-head">
+      <span class="card-icon violet"><Icon name="wand" :size="17" /></span>
+      <div>
+        <h2>Doğal dille düzelt</h2>
+        <div class="muted small">Claude mevcut kuralı talimatınıza göre günceller; değişikliği görüp siz kabul edersiniz.</div>
+      </div>
+    </div>
     <form class="row" @submit.prevent="submit">
       <input
         v-model="instruction"
@@ -62,7 +69,7 @@ function accept() {
         :disabled="busy || disabled || !!proposal"
       />
       <button class="btn" type="submit" :disabled="busy || disabled || !!proposal || !instruction.trim()">
-        <span v-if="busy" class="spinner" /> Claude'a sor
+        <span v-if="busy" class="spinner" /><Icon v-else name="sparkles" :size="14" /> Claude'a sor
       </button>
     </form>
     <div v-if="error" class="alert alert-danger">
@@ -72,7 +79,7 @@ function accept() {
 
     <div v-if="proposal" class="proposal">
       <div class="row-between" style="margin-bottom: 12px">
-        <strong>Claude'un önerisi</strong>
+        <strong class="row" style="gap: 6px"><Icon name="sparkles" :size="14" /> Claude'un önerisi</strong>
         <span v-if="unchanged" class="badge badge-warn">Koşullar değişmedi</span>
       </div>
       <div class="grid-2">
@@ -112,7 +119,8 @@ function accept() {
 </template>
 
 <style scoped>
-.proposal { border: 1px solid #d6d4f7; border-radius: var(--radius); padding: 16px; background: #fbfbff; }
+.refine-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 8px; }
+.proposal { border: 1px solid var(--accent-border); border-radius: var(--radius); padding: 16px; background: #fafaff; margin-top: 4px; }
 .side { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; background: var(--surface); }
 .side ul { margin: 0; padding-left: 18px; }
 .side li { padding: 2px 0; }

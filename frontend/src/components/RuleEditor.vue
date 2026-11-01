@@ -5,11 +5,12 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError } from '../api'
 import { errorText, errorsByPath } from '../lib/errors'
-import { defaultCondition, validateLocal } from '../lib/rule'
+import { defaultCondition, isUnmappedEmpty, validateLocal } from '../lib/rule'
 import { appState } from '../store'
 import type { Campaign, Condition, PreviewResult, Rule, RuleResponse } from '../types'
 import AudienceStats from './AudienceStats.vue'
 import ConditionRow from './ConditionRow.vue'
+import Icon from './Icon.vue'
 import RefinePanel from './RefinePanel.vue'
 import WarningList from './WarningList.vue'
 
@@ -21,6 +22,8 @@ const clone = (r: Rule): Rule => JSON.parse(JSON.stringify(r))
 const draft = ref<Rule | null>(props.campaign.rule ? clone(props.campaign.rule) : null)
 const livePreview = ref<PreviewResult | null>(props.preview)
 const previewLoading = ref(false)
+// Content for an empty audience would be a paid generation for nobody.
+const audienceEmpty = computed(() => !previewLoading.value && livePreview.value?.total === 0)
 const serverErrors = ref<Record<string, string[]>>({})
 const generating = ref(false)
 const genError = ref<unknown>(null)
@@ -29,6 +32,13 @@ const saveError = ref<unknown>(null)
 // The rule differs from what Claude produced (form edits, or saved that way:
 // a hand-edited rule is saved with an empty explanation).
 const handEdited = ref(!!props.campaign.rule && !props.campaign.rule.explanation)
+
+const unmappedEmpty = computed(() => !!draft.value && isUnmappedEmpty(draft.value))
+const unmappedPhrase = computed(() => {
+  const xs = (draft.value?.unmapped ?? []).map((u) => `“${u}”`)
+  if (xs.length <= 1) return { list: xs.join(''), noun: 'ifadesinin' }
+  return { list: xs.slice(0, -1).join(', ') + ' ve ' + xs[xs.length - 1], noun: 'ifadelerinin' }
+})
 
 const refineBusy = ref(false)
 const refineError = ref<unknown>(null)
@@ -202,11 +212,31 @@ async function acceptProposal() {
 <template>
   <section class="stack">
     <!-- generating -->
-    <div v-if="generating" class="card row" style="gap: 12px">
-      <span class="spinner" style="color: var(--accent)" />
-      <div>
-        <strong>Claude brief'i kitle kuralına çeviriyor…</strong>
-        <div class="muted small">Çıktı izin listesine göre doğrulanır; hatalıysa Claude'a düzelttirilir (en fazla 2 deneme).</div>
+    <div v-if="generating" class="rule-layout">
+      <div class="stack">
+        <div class="card gen-card">
+          <div class="row" style="gap: 14px; flex-wrap: nowrap">
+            <span class="card-icon"><span class="spinner" /></span>
+            <div>
+              <strong>Claude brief'i kitle kuralına çeviriyor…</strong>
+              <div class="muted small">Çıktı izin listesine göre doğrulanır; hatalıysa Claude'a düzelttirilir (en fazla 2 deneme).</div>
+            </div>
+          </div>
+          <div class="gen-skel">
+            <span class="skeleton" style="width: 72%" />
+            <span class="skeleton" style="width: 54%" />
+          </div>
+        </div>
+        <div class="card">
+          <span class="skeleton" style="width: 30%; height: 14px" />
+          <div class="skel-cond"><span class="skeleton" style="width: 85%" /></div>
+          <div class="skel-cond"><span class="skeleton" style="width: 65%" /></div>
+        </div>
+      </div>
+      <div class="card">
+        <span class="skeleton" style="width: 40%" />
+        <span class="skeleton" style="width: 60%; height: 28px" />
+        <span class="skeleton" style="width: 90%" />
       </div>
     </div>
 
@@ -223,79 +253,114 @@ async function acceptProposal() {
         </div>
       </div>
       <div class="row">
-        <button v-if="appState.config?.llm_configured !== false" class="btn" type="button" @click="generate">Tekrar dene</button>
-        <button class="btn btn-primary" type="button" @click="buildManually">Kuralı elle kur</button>
+        <button v-if="appState.config?.llm_configured !== false" class="btn" type="button" @click="generate">
+          <Icon name="refresh" :size="14" /> Tekrar dene
+        </button>
+        <button class="btn btn-primary" type="button" @click="buildManually"><Icon name="edit" :size="14" /> Kuralı elle kur</button>
       </div>
     </div>
 
     <template v-else>
       <div class="claude-note" v-if="draft.explanation">
-        <div class="claude-label"><span class="claude-mark">C</span> Claude bunu şöyle anladı</div>
+        <div class="claude-label"><span class="claude-mark"><Icon name="sparkles" :size="13" /></span> Claude bunu şöyle anladı</div>
         <p class="claude-text">“{{ draft.explanation }}”</p>
         <p v-if="handEdited" class="small muted" style="margin-top: 6px">
           Kural form ile değiştirildi; bu açıklama Claude'un yorumudur, aşağıdaki koşullar geçerlidir.
         </p>
       </div>
-      <p v-else-if="handEdited && campaign.rule" class="small muted">Kural elle düzenlendi.</p>
+      <p v-else-if="handEdited && campaign.rule" class="small muted row" style="gap: 6px"><Icon name="edit" :size="13" /> Kural elle düzenlendi.</p>
 
-      <div class="card">
-        <div class="card-title">
-          <h2>Koşullar</h2>
-          <span class="muted small">Tüm koşullar <strong>VE</strong> ile birleşir</span>
-        </div>
-        <div class="stack-sm">
-          <div v-if="draft.audience === 'all'" class="alert alert-info">
-            <span class="alert-icon">i</span>
-            <div class="alert-body">Koşul yok — <strong>tüm kullanıcılar</strong> hedefleniyor.</div>
-          </div>
-          <ConditionRow
-            v-for="(c, i) in draft.conditions"
-            :key="i"
-            :condition="c"
-            :errors="condErrors(i)"
-            :disabled="saving || !!proposal"
-            @update="updateCond(i, $event)"
-            @remove="removeCond(i)"
-          />
-          <div v-for="m in ruleLevelErrors" :key="m" class="field-error">{{ m }}</div>
-          <div class="row-between">
-            <div class="row" style="gap: 8px">
-              <button type="button" class="btn btn-sm" :disabled="saving || !!proposal" @click="addCond">+ Koşul ekle</button>
-              <button
-                v-if="draft.audience !== 'all'"
-                type="button"
-                class="btn btn-ghost btn-sm"
+      <div class="rule-layout">
+        <div class="stack">
+          <div class="card card-flush">
+            <div class="card-head">
+              <span class="card-icon"><Icon name="filter" :size="17" /></span>
+              <h2>Koşullar<span class="sub">Tüm koşullar <strong>VE</strong> ile birleşir</span></h2>
+              <span v-if="dirty" class="badge badge-warn badge-dot">Kaydedilmemiş değişiklik</span>
+            </div>
+            <div class="card-body stack-sm">
+              <div v-if="unmappedEmpty" class="unmapped-callout" role="alert">
+                <span class="card-icon amber"><Icon name="alert" :size="18" /></span>
+                <div class="stack-sm" style="gap: 10px">
+                  <div>
+                    <div class="unmapped-title">Bu brief için kural kurulamadı</div>
+                    <p>
+                      Brief'teki <strong>{{ unmappedPhrase.list }}</strong> {{ unmappedPhrase.noun }} bir karşılığı yok.
+                      Kural boş bırakıldı — aşağıdan koşul ekleyin.
+                    </p>
+                    <p class="small" style="margin-top: 4px">Boş kitleyle kampanya onaylanamaz.</p>
+                  </div>
+                  <div class="row" style="gap: 8px">
+                    <button type="button" class="btn btn-primary btn-sm" :disabled="saving || !!proposal" @click="addCond">
+                      <Icon name="plus" :size="14" /> Koşul ekle
+                    </button>
+                    <span class="small muted">ya da aşağıda Claude'a doğal dille tarif edin.</span>
+                  </div>
+                </div>
+              </div>
+              <div v-if="draft.audience === 'all'" class="alert alert-info">
+                <span class="alert-icon">i</span>
+                <div class="alert-body">Koşul yok — <strong>tüm kullanıcılar</strong> hedefleniyor.</div>
+              </div>
+              <ConditionRow
+                v-for="(c, i) in draft.conditions"
+                :key="i"
+                :condition="c"
+                :errors="condErrors(i)"
                 :disabled="saving || !!proposal"
-                @click="selectAll"
-              >
-                Tüm kullanıcılar
-              </button>
-            </div>
-            <div v-if="dirty" class="row" style="gap: 8px">
-              <span class="badge badge-warn">Kaydedilmemiş değişiklik</span>
-              <button v-if="campaign.rule" type="button" class="btn btn-ghost btn-sm" @click="discard">Geri al</button>
-              <button type="button" class="btn btn-sm" :disabled="saving || hasErrors" @click="save(draft)">Kaydet</button>
+                @update="updateCond(i, $event)"
+                @remove="removeCond(i)"
+              />
+              <div v-for="m in ruleLevelErrors" :key="m" class="field-error"><Icon name="alert" :size="13" style="margin-top: 2px" /> {{ m }}</div>
+              <div class="row-between" style="margin-top: 4px">
+                <div class="row" style="gap: 8px">
+                  <button type="button" class="btn btn-sm btn-soft" :disabled="saving || !!proposal" @click="addCond">
+                    <Icon name="plus" :size="14" /> Koşul ekle
+                  </button>
+                  <button
+                    v-if="draft.audience !== 'all'"
+                    type="button"
+                    class="btn btn-ghost btn-sm"
+                    :disabled="saving || !!proposal"
+                    @click="selectAll"
+                  >
+                    <Icon name="users" :size="14" /> Tüm kullanıcılar
+                  </button>
+                </div>
+                <div v-if="dirty" class="row" style="gap: 8px">
+                  <button v-if="campaign.rule" type="button" class="btn btn-ghost btn-sm" @click="discard"><Icon name="undo" :size="14" /> Geri al</button>
+                  <button type="button" class="btn btn-sm" :disabled="saving || hasErrors" @click="save(draft)"><Icon name="save" :size="14" /> Kaydet</button>
+                </div>
+              </div>
             </div>
           </div>
+
+          <div class="card">
+            <RefinePanel
+              :current="draft"
+              :proposal="proposal"
+              :busy="refineBusy || saving"
+              :error="refineError"
+              :disabled="appState.config?.llm_configured === false"
+              @refine="refine"
+              @accept="acceptProposal"
+              @reject="proposal = null"
+            />
+          </div>
         </div>
-      </div>
 
-      <div class="card stack" v-if="livePreview">
-        <AudienceStats :preview="livePreview" :stale="hasErrors" :loading="previewLoading" />
-        <WarningList :preview="livePreview" :unmapped="draft.unmapped" />
-      </div>
-
-      <div class="card">
-        <RefinePanel
-          :current="draft"
-          :proposal="proposal"
-          :busy="refineBusy || saving"
-          :error="refineError"
-          :disabled="appState.config?.llm_configured === false"
-          @refine="refine"
-          @accept="acceptProposal"
-          @reject="proposal = null"
-        />
+        <aside class="rule-aside">
+          <div v-if="livePreview" class="card card-flush">
+            <div class="card-head">
+              <span class="card-icon teal"><Icon name="users" :size="17" /></span>
+              <h2>Kitle<span class="sub">Canlı önizleme</span></h2>
+            </div>
+            <div class="card-body stack">
+              <AudienceStats :preview="livePreview" :stale="hasErrors" :loading="previewLoading" />
+              <WarningList :preview="livePreview" :unmapped="draft.unmapped" />
+            </div>
+          </div>
+        </aside>
       </div>
 
       <div v-if="saveError && !Object.keys(serverErrors).length" class="alert alert-danger">
@@ -304,11 +369,34 @@ async function acceptProposal() {
       </div>
 
       <div class="footer-bar">
-        <span class="muted small">Devam edildiğinde kural kaydedilir; içerik bu kitlenin en uzun isim ve şehrine göre ölçülür.</span>
-        <button class="btn btn-primary btn-lg" type="button" :disabled="saving || hasErrors || !!proposal" @click="next">
-          <span v-if="saving" class="spinner" /> İçeriğe geç →
+        <span v-if="audienceEmpty" class="muted small">Kitle boş — içerik üretmek için önce kişi seçen bir koşul ekleyin.</span>
+        <span v-else class="muted small">Devam edildiğinde kural kaydedilir; içerik bu kitlenin en uzun isim ve şehrine göre ölçülür.</span>
+        <button class="btn btn-primary btn-lg" type="button" :disabled="saving || hasErrors || !!proposal || audienceEmpty" @click="next">
+          <span v-if="saving" class="spinner" /> İçeriğe geç <Icon name="arrow-right" :size="16" />
         </button>
       </div>
     </template>
   </section>
 </template>
+
+<style scoped>
+.rule-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: var(--space-4); align-items: start; }
+.rule-aside { position: sticky; top: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+.gen-skel { margin-top: 16px; padding-left: 48px; }
+.skel-cond { margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.unmapped-callout {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 16px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--warn-border);
+  border-left: 4px solid var(--warn-strong);
+  background: linear-gradient(135deg, #fffbeb, #fff7ed);
+  color: var(--warn-text);
+}
+.unmapped-title { font-weight: 700; font-size: 15px; color: #78350f; margin-bottom: 2px; }
+.unmapped-callout p strong { color: #78350f; }
+@media (max-width: 1100px) {
+  .rule-layout { grid-template-columns: 1fr; }
+  .rule-aside { position: static; }
+}
+</style>
