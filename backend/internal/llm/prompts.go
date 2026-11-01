@@ -51,6 +51,7 @@ func contentSystem(wc content.WorstCase) string {
 
 Kurallar:
 - Dil her zaman Türkçe. Tonu, teklifi (indirim oranı vb.) ve aciliyeti brief'ten al; brief'te olmayan teklif, kod veya tarih uydurma.
+- Brief'te yazmayan HİÇBİR vaat veya iddia ekleme: stok durumu ("stoklar sınırlı", "tükenmeden"), teslimat/kargo ("hızlı teslimat", "ücretsiz kargo"), iade, garanti, hediye, süre sınırı ("son gün", "24 saat", "kaçırma") gibi ifadeler yalnızca brief'te geçiyorsa kullanılabilir. Metni brief'teki bilgiyle sınırla; çekici kılmak için bilgi uydurma, genel bir eylem çağrısı ("Hemen incele") yeterlidir.
 - Yalnızca iki değişken var: {{first_name}} ve {{city}}. Başka değişken (ör. {{phone}}, {{discount}}) KULLANMA; tek süslü parantez kullanma.
 - Uzunluk değişkenler en uzun değerle (bu kitlede isim %d, şehir %d karakter) doldurularak ölçülür: SMS en fazla %d karakter, e-posta konusu en fazla %d karakter. SMS'i kısa tut (yaklaşık 120 karakter hedefle).
 - Değişkene ek getirme ({{city}}'de, {{city}}'daki, {{first_name}}'e YANLIŞ): değer bilinmediği için ünlü uyumu tutmaz. Ek gerektirmeyen kalıp kullan ({{city}} için, Merhaba {{first_name}},).

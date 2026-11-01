@@ -135,6 +135,7 @@ func (c *Composer) Content(ctx context.Context, campaignID uuid.UUID, brief stri
 			cc.Email = content.Email{}
 		}
 		errs := content.Validate(cc, channels, wc)
+		errs = append(errs, content.UnrequestedClaims(brief, cc)...)
 		if len(errs) == 0 {
 			out = cc
 		}

@@ -164,3 +164,15 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 **Neden:** Canlı denemede model doğru davranıp kuralı boş bırakmıştı, ama doğrulama "en az bir koşul" istediği için onarım turu modeli herkesi seçen bir koşul uydurmaya itti. Sessizce herkese göndermek, eksik kuralı sormaktan çok daha kötü. Bu ek kontroller yalnızca modele uygulanır; pazarlamacı elle "Tüm kullanıcılar" seçebilir.
 
+## 24. Model içeriği brief'te olmayan vaat veremez
+
+**Karar:** Üretilen içerik stok ("stoklar tükenmeden"), kargo/teslimat, garanti, iade, hediye ve süre sınırı ("son gün", "24 saat içinde") ifadeleri için taranır. İfade brief'te (ya da aynı gruptan bir kelime: "kargo bedava" → "ücretsiz kargo") geçmiyorsa `unrequested_claim` hatası olur ve onarım döngüsüne döner. Kontrol yalnızca model çıktısına uygulanır; pazarlamacı elle istediğini yazabilir. Prompt'a da aynı kural eklendi.
+
+**Neden:** Pazarlamacı brief'te stok ya da hızlı teslimat demediği halde model metne bu vaatleri ekledi; eval'de eski prompt'la 14 içerikten 2'sinde aynısı oldu. Gerçekte olmayan bir vaat (stok, teslimat süresi) müşteriye yanlış bilgi ve hukuki risk demek. Yalnızca prompt kuralı bunu azalttı ama sıfırlamadı, bu yüzden kontrol doğrulamada. Kelime listesi kaba bir sezgisel: her uydurmayı yakalamaz (ör. "en çok satanlar") ve nadiren yanlış pozitif verebilir; yanlış pozitifte onarım 2 turda düzelmezse hata kullanıcıya gösterilir ve metin elle düzenlenir.
+
+## 25. Çökme kurtarma gerçek bir kill ile test edilir
+
+**Karar:** Birim testleri çökmeyi veritabanında simüle eder (süresi geçmiş kira ile `sending` satır). Buna ek olarak `make chaos`, çalışan stack'te SMS lideri worker'ı gönderim ortasında `SIGKILL` ile öldürür ve devralma, kurtarma ve tek teslimatı provider'ın kendi sayaçlarıyla doğrular.
+
+**Neden:** Simülasyon kurtarma mantığını test eder ama gerçek bir süreç ölümünü (yarıda kesilen HTTP istekleri, düşen advisory lock, başka process'in devralması) test etmez. Test iki modda da geçti: idempotent provider'da yarım kalanlar aynı key ile tekrar gönderilip tek teslimatta kaldı; idempotency yokken `unknown` oldular ve tekrar gönderilmediler.
+

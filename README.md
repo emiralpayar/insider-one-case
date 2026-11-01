@@ -75,7 +75,7 @@ Ayrıntılar ve bedelleri için [DECISIONS.md](DECISIONS.md).
 Claude'un çıktısı hiçbir zaman "güvenilir" kabul edilmez; her katman bir öncekinin kaçırdığını yakalar:
 
 1. **Kısıtlı çıktı alanı.** Claude SQL değil, küçük bir segment DSL'i üretir. Şema alan izin listesini, alan başına operatörleri ve değer tiplerini tanımlar; yapılandırılmış çıktı (`output_config.format` JSON schema) ile istenir. İçerik için de kanal bazında şema var (`sms`, `email.subject/preheader/body`).
-2. **Backend doğrulaması.** Çıktı bilinmeyen alanları reddeden katı JSON decode'dan, ardından semantik doğrulamadan geçer: bilinmeyen alan/operatör, aralık dışı gün sayısı, bilinmeyen şehir (Türkçe normalizasyonla: `istanbul` → `İstanbul`), çelişen koşullar, boş koşul listesi (yalnızca `audience: "all"` ya da eşlenemeyen kitle taslağıyla kabul). Model çıktısı ek olarak herkesi seçen yer tutucu koşulları (`order_count gte 0`) ve eşlenemeyen kitlenin `audience: "all"` ile genişletilmesini reddeder. İçerikte en kötü durum uzunluğu, izin listesi dışı/bozuk değişkenler (`{{phone}}`, `{{first_name`) ve değişkene yapışık ekler (`{{city}}'daki`: değer bilinmediği için ünlü uyumu tutmaz) kontrol edilir.
+2. **Backend doğrulaması.** Çıktı bilinmeyen alanları reddeden katı JSON decode'dan, ardından semantik doğrulamadan geçer: bilinmeyen alan/operatör, aralık dışı gün sayısı, bilinmeyen şehir (Türkçe normalizasyonla: `istanbul` → `İstanbul`), çelişen koşullar, boş koşul listesi (yalnızca `audience: "all"` ya da eşlenemeyen kitle taslağıyla kabul). Model çıktısı ek olarak herkesi seçen yer tutucu koşulları (`order_count gte 0`) ve eşlenemeyen kitlenin `audience: "all"` ile genişletilmesini reddeder. İçerikte en kötü durum uzunluğu, izin listesi dışı/bozuk değişkenler (`{{phone}}`, `{{first_name`) ve değişkene yapışık ekler (`{{city}}'daki`: değer bilinmediği için ünlü uyumu tutmaz) kontrol edilir. Model içeriği ayrıca brief'te geçmeyen vaatler için taranır (stok, kargo/teslimat, garanti, iade, hediye, süre sınırı); bulunursa onarıma döner ([DECISIONS.md #24](DECISIONS.md)).
 3. **Onarım döngüsü.** Doğrulama hataları kod + alan + mesaj listesi olarak ("SMS en kötü durumda 174 karakter, 160'a indir") Claude'a geri gönderilir; en fazla 2 onarım. Sonra hata kullanıcıya gösterilir ve form ile elle düzenleme mümkündür. Refusal, `max_tokens` ile kesilmiş çıktı ve transport hataları onarılmaya çalışılmaz; loglanıp hata olarak döner.
 4. **Prompt injection.** Brief, düzeltme talimatı ve mevcut kural etiketli bloklar içinde "güvenilmeyen veri" olarak verilir. Asıl garanti promptta değil doğrulamada: brief ne derse desin çalışan şey yalnızca izin listesindeki koşullardır (`DROP TABLE` içeren alan/değerler testlerde reddediliyor).
 5. **Sessiz hata yok.** Brief'in kitleye karşılık gelmeyen kısımları (`"VIP"`, `"genç kullanıcılar"`) `unmapped` olarak döner ve arayüzde uyarı olur. Kitlenin tamamı eşlenemezse kural boş kalır (kimseyle eşleşmez) ve pazarlamacı koşulu elle ekler; çok geniş kitle ek onay ister.
@@ -84,7 +84,7 @@ Claude'un çıktısı hiçbir zaman "güvenilir" kabul edilmez; her katman bir �
 
 ### Model seçimi ve eval
 
-`make eval` 15 örnek brief'i gerçek Claude ile çalıştırır. Her brief'in beklenen kuralı tanımlıdır: koşullar birebir, `audience` ve `unmapped` beklentisiyle karşılaştırılır. Kitlesi olan her brief için içerik de üretilip doğrulanır. Set bilinçli olarak zor durumlar içerir: eşlenemeyen kitle ("VIP"), kısmen eşlenen kitle ("sadık müşterilerden İstanbul'dakiler"), "herkese", şehir hariç tutma, "hiç sipariş vermemiş" ve prompt injection (`DROP TABLE users`). Sonuçlar (2026-11-01):
+`make eval` 15 örnek brief'i gerçek Claude ile çalıştırır. Her brief'in beklenen kuralı tanımlıdır: koşullar birebir, `audience` ve `unmapped` beklentisiyle karşılaştırılır. Kitlesi olan her brief için içerik de üretilir; doğrulamadan ve brief'te olmayan vaat kontrolünden geçmesi gerekir. Set bilinçli olarak zor durumlar içerir: eşlenemeyen kitle ("VIP"), kısmen eşlenen kitle ("sadık müşterilerden İstanbul'dakiler"), "herkese", şehir hariç tutma, "hiç sipariş vermemiş" ve prompt injection (`DROP TABLE users`). Sonuçlar (2026-11-01):
 
 | Model (segment + içerik) | Doğru kural | İlk denemede | Geçerli içerik | Onarımsız içerik | Toplam süre |
 |---|---|---|---|---|---|
@@ -92,6 +92,8 @@ Claude'un çıktısı hiçbir zaman "güvenilir" kabul edilmez; her katman bir �
 | `claude-haiku-5-5` | 12/15 | 12 | 14/14 | 14 | 95 sn |
 
 Haiku'nun üç hatası da aynı türde: koşullar doğru, ama mesaj içeriğine ait ifadeleri ("memnuniyet anketi", "%30 indirim ve samimi ton") `unmapped`'e yazıyor; arayüzde bu, olmayan bir sorun için uyarı demek. Haiku bu iş yükünde daha hızlı da değil. Varsayılan bu yüzden Sonnet 5.5; model `ANTHROPIC_MODEL_SEGMENT` / `ANTHROPIC_MODEL_CONTENT` ile değiştirilebilir ([DECISIONS.md #15](DECISIONS.md)).
+
+Vaat kontrolü eklenmeden önceki prompt'la aynı set 12/14 geçerli içerik verdi: sepet hatırlatmasına brief'te olmayan "stoklar tükenmeden", "hızlı teslimat", "sınırlı" ifadelerini, yılbaşı mesajına "hediye" ekledi. Prompt kuralı bunu azalttı ama sıfırlamadı (bir koşuda "son gün" çıktı); doğrulama + onarım ile 14/14.
 
 Örnek: `docker compose exec postgres psql -U composer -c "select purpose, attempt, validation_errors, latency_ms from llm_calls order by id desc limit 10"`
 
@@ -118,6 +120,7 @@ Testler gerçek Postgres kullanır (her test kendi veritabanını açar), gerçe
 | `campaign.TestStatusKeepsErrorOfRetriedThenSentMessage` | Retry sonrası gönderilen mesaj hata geçmişiyle dashboard'da kalır. |
 | `segment.TestValidateIncompleteRule`, `TestValidateGenerated` | Eşlenemeyen kitle boş taslak olarak kalır ve kimseyle eşleşmez; modelin herkesi seçen yer tutucu koşulları reddedilir. |
 | `content.TestValidatePlaceholderSuffix` | `{{city}}'daki` gibi yapışık ekler reddedilir. |
+| `content.TestUnrequestedClaims`, `llm.TestContentRepairsUnrequestedClaim` | Brief'te olmayan vaat ("stoklar tükenmeden") model çıktısında onarıma döner; brief izin veriyorsa ("kargo bedava" → "ücretsiz kargo") geçer. |
 | Frontend (Vitest, 81 test) | GSM-7/UCS-2 parça hesabı, kısmi JSON ayrıştırma, SSE okuyucu, kural yardımcıları, değişken etiketi ↔ metin dönüşümü, gönderim günlüğü biçimlendirme. |
 
 Gerçek Claude ile (key `.env`'de olmalı, `make test`'e dahil değil):
@@ -127,6 +130,25 @@ make eval     # 15 brief'lik eval seti; kaç kuralın doğru, kaç içeriğin ge
 EVAL_CONTENT=0 make eval   # yalnızca kurallar
 cd backend && ANTHROPIC_API_KEY=... go test ./internal/llm -run TestAnthropicSmoke -tags=live -v   # tek brief duman testi
 ```
+
+### Gerçek çökme testi: `make chaos`
+
+Çalışan stack'e karşı (`make up`) gerçek bir worker'ı gönderimin ortasında `SIGKILL` ile öldürür:
+
+1. LLM'siz bir kampanya oluşturur (herkese, SMS + e-posta, ~8.300 mesaj) ve onaylar.
+2. ~400 mesaj gittikten sonra SMS kanalının lider worker'ını `docker kill -s KILL` ile öldürür. Düzgün kapanış yoktur; elindeki istekler yarıda kesilir.
+3. O an worker'ın elinde `sending` durumunda kalan mesajları ve bunlardan provider'a ulaşmış ama sonucu kaydedilememiş olanları not eder.
+4. Hepsi sonuçlanana kadar bekler, sonra öldürülen worker'ı tekrar başlatır.
+5. Kontroller: takılı mesaj yok, kalan worker liderliği devraldı, alıcı başına en fazla 1 teslimat, provider teslim sayısı veritabanındaki `sent` sayısına eşit, yarım kalanların hepsi sonuçlandı ve provider'a ulaşmış olanlar ikinci kez teslim edilmedi.
+
+Sonuçlar (2026-11-01, iki worker):
+
+| Mod | Yarım kalan | Provider'a ulaşmış | Sonuç |
+|---|---|---|---|
+| Idempotent provider (varsayılan) | 19 | 2 | 19'u `sent`; ulaşmış 2'si provider'da tek teslimat (aynı Idempotency-Key ile tekrar → `duplicate`). 8.278 `sent` = 8.278 teslimat. |
+| Idempotency yok (`PROVIDER_IDEMPOTENCY=false MOCK_IDEMPOTENCY=false docker compose up -d worker mock-provider`) | 33 | 10 | 33'ü de `unknown`, hiçbiri tekrar gönderilmedi; ulaşmış 10'u tek teslimat. |
+
+Kampanya listesine "Chaos test" adlı bir kampanya ekler. Kira süresi 30 sn olduğu için yarım kalan mesajlar ~30 sn sonra kurtarılır.
 
 CI: `.github/workflows/ci.yml` (Postgres service container, `go test ./... -race`, frontend test + build).
 

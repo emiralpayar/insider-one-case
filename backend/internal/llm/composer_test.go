@@ -180,6 +180,22 @@ func TestContentRepairsTooLongSMS(t *testing.T) {
 	}
 }
 
+func TestContentRepairsUnrequestedClaim(t *testing.T) {
+	s := NewScripted(`{"sms":"Merhaba {{first_name}}, stoklar tükenmeden sepetini tamamla!"}`,
+		`{"sms":"Merhaba {{first_name}}, sepetin seni bekliyor!"}`)
+	c, err := newComposer(s, &memLog{}).Content(context.Background(), uuid.New(), "Sepet hatırlatması gönder.",
+		segment.Rule{Audience: "all"}, []string{"sms"}, content.WorstCase{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SMS != "Merhaba {{first_name}}, sepetin seni bekliyor!" {
+		t.Fatalf("content = %+v", c)
+	}
+	if !strings.Contains(lastUser(s.Calls()[1]), "unrequested_claim") {
+		t.Fatalf("repair message = %q", lastUser(s.Calls()[1]))
+	}
+}
+
 func TestContentSchemaFollowsChannels(t *testing.T) {
 	s := NewScripted(`{"sms":"Merhaba {{first_name}}!"}`)
 	_, err := newComposer(s, &memLog{}).Content(context.Background(), uuid.Nil, "brief", segment.Rule{Audience: "all"},

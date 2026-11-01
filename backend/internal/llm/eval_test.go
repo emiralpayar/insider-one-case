@@ -129,9 +129,9 @@ func TestEval(t *testing.T) {
 
 	type row struct {
 		ok, contentOK, contentFirst bool
-		segTries, conTries         int
-		note                       string
-		dur                        time.Duration
+		segTries, conTries          int
+		note                        string
+		dur                         time.Duration
 	}
 	rows := make([]row, len(evalCases))
 	for i, ec := range evalCases {
@@ -154,6 +154,8 @@ func TestEval(t *testing.T) {
 				rw.note = strings.TrimSpace(rw.note + " content error: " + err.Error())
 			} else if errs := content.Validate(cc, []string{"sms", "email"}, content.WorstCase{}.WithDefaults()); len(errs) > 0 {
 				rw.note = strings.TrimSpace(rw.note + fmt.Sprintf(" content invalid: %v", errs))
+			} else if inv := content.UnrequestedClaims(ec.brief, cc); len(inv) > 0 {
+				rw.note = strings.TrimSpace(rw.note + fmt.Sprintf(" invented claims not in brief: %v", inv))
 			} else {
 				rw.contentOK = true
 				rw.contentFirst = rw.conTries == 1
