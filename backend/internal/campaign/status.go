@@ -14,7 +14,7 @@ import (
 const rateWindow = 10 * time.Second
 
 // recentErrorLimit is the number of recent message errors in a report.
-const recentErrorLimit = 10
+const recentErrorLimit = 50
 
 // StatusReport is the live sending status of a campaign.
 type StatusReport struct {

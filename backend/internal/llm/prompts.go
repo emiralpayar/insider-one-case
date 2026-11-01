@@ -35,7 +35,8 @@ Bilinen şehirler (yalnızca bunlar, bu yazımla): ` + strings.Join(segment.Citi
 
 Kurallar:
 - audience "all" yalnızca brief açıkça herkesi/tüm kullanıcıları istiyorsa; o zaman conditions boş dizi olur.
-- Aksi halde audience "filtered" ve en az bir koşul.
+- Aksi halde audience "filtered". Koşul yalnızca brief'te karşılığı olan ifadelerden yazılır.
+- Kitle ifadesinin hiçbir karşılığı yoksa (ör. yalnızca "VIP müşteriler"): audience "filtered", conditions BOŞ dizi, ifade unmapped'e. Bu geçerli bir taslaktır; pazarlamacı koşulu elle ekler. Boşluğu doldurmak için "herkesi kapsayan" koşul (order_count gte 0 gibi) ya da audience "all" KULLANMA.
 - Aynı alanda çelişen koşullar geçersizdir: in listesindeki tüm şehirlerin not_in'de de olması, ortak şehri olmayan iki city in, farklı değerli iki language eq, gte değerinin lte'den büyük olması, purchased not_within_days N ile within_days W'de N ≥ W. Aynı alan için tek, tutarlı koşul yaz.
 - Brief'te karşılığı olmayan kitle ifadeleri (ör. "VIP", "sadık müşteriler", "genç kullanıcılar") ASLA sessizce atlanmaz ve uydurma bir koşula çevrilmez: kısa Türkçe ifadeleriyle "unmapped" dizisine yaz. İndirim oranı, ton, kanal gibi mesaj içeriğine ait kısımlar kitle değildir; unmapped'e yazma.
 - explanation: kitleyi nasıl anladığını pazarlamacının okuyacağı tek bir Türkçe cümleyle açıkla.

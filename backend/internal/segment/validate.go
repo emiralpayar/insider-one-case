@@ -31,7 +31,10 @@ func Validate(r Rule) (Rule, verr.List) {
 			add("conditions", "all_with_conditions", "audience \"all\" must have no conditions")
 		}
 	case "filtered":
-		if len(r.Conditions) == 0 {
+		// No conditions is allowed only as an incomplete draft: the audience
+		// could not be mapped (unmapped is set) and the marketer adds the
+		// condition by hand. Compile matches nobody for it.
+		if len(r.Conditions) == 0 && len(r.Unmapped) == 0 {
 			add("conditions", "empty_conditions", "audience \"filtered\" requires at least one condition")
 		}
 	default:
@@ -201,4 +204,26 @@ func parseInt(raw json.RawMessage) (int64, bool) {
 	}
 	n, err := strconv.ParseInt(s, 10, 64)
 	return n, err == nil
+}
+
+// ValidateGenerated is Validate plus the checks that apply only to model
+// output: an unmapped audience must not be widened to everyone, either with
+// audience "all" or with a condition every user satisfies.
+func ValidateGenerated(r Rule) (Rule, verr.List) {
+	out, errs := Validate(r)
+	if r.Audience == "all" && len(r.Unmapped) > 0 {
+		errs = append(errs, verr.Error{Path: "audience", Code: "all_with_unmapped",
+			Message: "the brief names an audience that could not be mapped; leave conditions empty instead of selecting everyone"})
+	}
+	for i, c := range r.Conditions {
+		spec, ok := whitelist[c.Field]
+		if !ok || c.Op != "gte" {
+			continue
+		}
+		if n, ok := parseInt(c.Value); ok && n <= spec.min {
+			errs = append(errs, verr.Error{Path: fmt.Sprintf("conditions[%d]", i), Code: "tautological_condition",
+				Message: fmt.Sprintf("%s gte %d matches every user; do not add placeholder conditions", c.Field, n)})
+		}
+	}
+	return out, errs
 }

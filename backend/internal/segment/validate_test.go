@@ -153,3 +153,49 @@ func TestValidateNonConflicting(t *testing.T) {
 		}
 	}
 }
+
+// A brief whose whole audience is unknown ("VIP") yields an incomplete rule:
+// filtered, no conditions, the phrase in unmapped. It is valid as a draft and
+// matches nobody until the marketer adds a condition.
+func TestValidateIncompleteRule(t *testing.T) {
+	r := segment.Rule{Audience: "filtered", Unmapped: []string{"VIP müşteriler"}}
+	if _, errs := segment.Validate(r); len(errs) != 0 {
+		t.Fatalf("incomplete rule should be valid: %v", errs)
+	}
+	if _, errs := segment.Validate(filtered()); len(errs) != 1 || errs[0].Code != "empty_conditions" {
+		t.Fatalf("empty rule without unmapped: %v", errs)
+	}
+}
+
+// The model must not paper over an unknown audience with a rule that selects
+// everyone.
+func TestValidateGenerated(t *testing.T) {
+	cases := []struct {
+		r    segment.Rule
+		code string
+	}{
+		{segment.Rule{Audience: "all", Unmapped: []string{"VIP"}}, "all_with_unmapped"},
+		{filtered(cond("order_count", "gte", 0)), "tautological_condition"},
+		{filtered(cond("total_spent", "gte", 0)), "tautological_condition"},
+	}
+	for _, c := range cases {
+		_, errs := segment.ValidateGenerated(c.r)
+		found := false
+		for _, e := range errs {
+			found = found || e.Code == c.code
+		}
+		if !found {
+			t.Errorf("%+v: want %s, got %v", c.r, c.code, errs)
+		}
+	}
+	ok := []segment.Rule{
+		{Audience: "all"},
+		{Audience: "filtered", Unmapped: []string{"VIP"}},
+		filtered(cond("order_count", "gte", 1)),
+	}
+	for _, r := range ok {
+		if _, errs := segment.ValidateGenerated(r); len(errs) != 0 {
+			t.Errorf("%+v: %v", r, errs)
+		}
+	}
+}

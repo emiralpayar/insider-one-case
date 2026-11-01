@@ -44,3 +44,10 @@ func TestCompileRejectsInvalid(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestCompileIncompleteMatchesNobody(t *testing.T) {
+	where, args, err := segment.Compile(segment.Rule{Audience: "filtered", Unmapped: []string{"VIP"}}, 0, time.Now())
+	if err != nil || where != "FALSE" || len(args) != 0 {
+		t.Fatal(where, args, err)
+	}
+}

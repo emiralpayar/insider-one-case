@@ -18,6 +18,9 @@ func Compile(r Rule, argOffset int, asOf time.Time) (string, []any, error) {
 	if r.Audience == "all" {
 		return "TRUE", nil, nil
 	}
+	if len(r.Conditions) == 0 { // incomplete draft, see Validate
+		return "FALSE", nil, nil
+	}
 	var args []any
 	// add appends an arg and returns its placeholder.
 	add := func(v any, cast string) string {

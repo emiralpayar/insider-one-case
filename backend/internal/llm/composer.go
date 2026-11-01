@@ -77,7 +77,7 @@ func (c *Composer) rule(ctx context.Context, campaignID uuid.UUID, req Request) 
 		if errs := decodeStrict(text, &r); errs != nil {
 			return errs
 		}
-		norm, errs := segment.Validate(r)
+		norm, errs := segment.ValidateGenerated(r)
 		if len(errs) == 0 {
 			out = norm
 		}

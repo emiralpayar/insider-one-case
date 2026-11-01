@@ -155,3 +155,10 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 **Karar:** `{{city}}'daki`, `{{city}}'de`, `{{first_name}}'e` gibi değişkenin hemen ardından kesme işareti ya da harf gelen metinler `placeholder_suffix` doğrulama hatası verir. İçerik prompt'u da ek gerektirmeyen kalıpları (`{{city}} için`, `Merhaba {{first_name}},`) ister.
 
 **Neden:** Türkçe ek ünlü uyumuna göre değişir. Değer bilinmediği için ek bazı alıcılarda yanlış olur ("İzmir'daki"), isim boşsa da ortada ek kalır ("Merhaba 'e"). Gerçek API ile ilk denemede Sonnet tam bunu yazdı. Kural hata olduğu için LLM'in onarım döngüsü düzeltir; pazarlamacının elle yazdığı metin de aynı kontrolden geçer. Ek render sırasında otomatik çekilebilirdi (İstanbul'da/İzmir'de), ama ünsüz sertleşmesi ve istisnalar bu case'in kapsamına göre fazla.
+
+## 23. Karşılığı olmayan kitle: kural boş kalır, uydurulmaz
+
+**Karar:** Brief'teki kitle ifadesinin hiçbir karşılığı yoksa ("VIP müşteriler") kural `filtered`, koşulsuz ve ifade `unmapped`'de olarak kabul edilir. Bu bir taslaktır: kimseyle eşleşmez (`FALSE`), `empty_audience` ve `unmapped` uyarıları görünür, pazarlamacı koşulu elle ekleyene kadar onay kapalıdır. Model çıktısı ayrıca `ValidateGenerated` ile kontrol edilir: `unmapped` doluyken `audience:"all"` ve alt sınırla `gte` koşulu (`order_count gte 0` gibi herkesi seçen yer tutucu) reddedilir.
+
+**Neden:** Canlı denemede model doğru davranıp kuralı boş bırakmıştı, ama doğrulama "en az bir koşul" istediği için onarım turu modeli herkesi seçen bir koşul uydurmaya itti. Sessizce herkese göndermek, eksik kuralı sormaktan çok daha kötü. Bu ek kontroller yalnızca modele uygulanır; pazarlamacı elle "Tüm kullanıcılar" seçebilir.
+
