@@ -91,6 +91,7 @@ func New(cfg Config) *Server {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/config", s.config)
 		r.Post("/segments/preview", s.previewSegment)
+		r.Post("/segments/members", s.segmentMembers)
 		r.Post("/campaigns", s.createCampaign)
 		r.Get("/campaigns", s.listCampaigns)
 		r.Route("/campaigns/{id}", func(r chi.Router) {
