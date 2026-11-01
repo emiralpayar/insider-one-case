@@ -1,7 +1,7 @@
 TEST_DATABASE_URL ?= postgres://postgres:postgres@localhost:55432/postgres?sslmode=disable
 COMPOSE_TEST = docker compose -f docker-compose.test.yml
 
-.PHONY: test test-db-up test-db-down up down logs eval
+.PHONY: test test-db-up test-db-down up down logs eval chaos
 
 test-db-up:
 	$(COMPOSE_TEST) up -d --wait
@@ -28,3 +28,9 @@ logs:
 eval:
 	@[ -f .env ] || { echo "eval: .env not found (copy .env.example and set ANTHROPIC_API_KEY)"; exit 1; }
 	cd backend && set -a && . ../.env && set +a && go test -tags=eval -run TestEval -count=1 -v -timeout 30m ./internal/llm
+
+# Real crash test against the running stack (make up first): SIGKILLs the
+# SMS-leader worker mid-campaign and checks takeover, recovery and that no
+# message was delivered twice. Adds one "Chaos test" campaign.
+chaos:
+	./scripts/chaos.sh
