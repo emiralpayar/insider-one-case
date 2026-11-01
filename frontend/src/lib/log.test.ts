@@ -63,3 +63,17 @@ describe('revealDelay', () => {
     expect(revealDelay(100, 2000)).toBe(40)
   })
 })
+
+describe('humanReason queue notes', () => {
+  it('explains the 429 cap and possibly delivered attempts', () => {
+    expect(humanReason('HTTP 429 Too Many Requests; gave up after 20 rate-limited answers')).toBe(
+      'Hız sınırı (429) · 20 kez hız sınırına takıldı, vazgeçildi',
+    )
+    expect(humanReason('HTTP 400 Bad Request; an earlier attempt may have been delivered')).toBe(
+      'HTTP 400 Bad Request · önceki deneme ulaşmış olabilir',
+    )
+    expect(humanReason('worker crashed mid-send')).toBe('Worker gönderim sırasında durdu')
+    expect(humanReason('consent revoked after a possibly delivered attempt')).toBe('İzin gönderimden önce geri çekildi')
+  })
+})
+

@@ -22,6 +22,12 @@ const clone = (r: Rule): Rule => JSON.parse(JSON.stringify(r))
 
 const draft = ref<Rule | null>(props.campaign.rule ? clone(props.campaign.rule) : null)
 const livePreview = ref<PreviewResult | null>(props.preview)
+// Preview of the saved rule (the parent's prop may update a tick later).
+const savedPreview = ref<PreviewResult | null>(props.preview)
+watch(
+  () => props.preview,
+  (p) => (savedPreview.value = p),
+)
 const previewLoading = ref(false)
 // Content for an empty audience would be a paid generation for nobody.
 const audienceEmpty = computed(() => !previewLoading.value && livePreview.value?.total === 0)
@@ -97,6 +103,9 @@ function buildManually() {
 function applySaved(r: RuleResponse, fromClaude: boolean) {
   emit('saved', r)
   if (fromClaude) handEdited.value = false
+  seq++ // a preview still in flight must not overwrite the saved one
+  previewLoading.value = false
+  savedPreview.value = r.preview
   draft.value = clone(r.rule)
   livePreview.value = r.preview
   serverErrors.value = {}
@@ -113,7 +122,14 @@ watch(
   draft,
   (r) => {
     clearTimeout(timer)
-    if (!r || !dirty.value) return
+    if (!r) return
+    if (!dirty.value) {
+      // Edited back to the saved rule: show the saved preview again.
+      seq++
+      livePreview.value = savedPreview.value
+      previewLoading.value = false
+      return
+    }
     serverErrors.value = {}
     if (Object.keys(localErrors.value).length) return
     timer = setTimeout(async () => {
@@ -165,7 +181,9 @@ function discard() {
     draft.value = clone(props.campaign.rule)
     handEdited.value = !props.campaign.rule.explanation
   }
-  livePreview.value = props.preview
+  seq++
+  previewLoading.value = false
+  livePreview.value = savedPreview.value
   serverErrors.value = {}
 }
 

@@ -20,6 +20,8 @@ const data = ref<MemberPage | null>(null)
 const loading = ref(false)
 const error = ref('')
 const closeBtn = ref<HTMLButtonElement | null>(null)
+const panel = ref<HTMLElement | null>(null)
+let opener: HTMLElement | null = null
 let seq = 0
 let debounce: ReturnType<typeof setTimeout> | undefined
 
@@ -48,9 +50,26 @@ watch(search, () => {
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
+  if (e.key === 'Tab' && panel.value) {
+    // aria-modal: keep Tab / Shift+Tab inside the drawer.
+    const els = [...panel.value.querySelectorAll<HTMLElement>('button:not([disabled]), input, [href], [tabindex]:not([tabindex="-1"])')]
+    if (!els.length) return
+    const first = els[0], last = els[els.length - 1]
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    } else if (!panel.value.contains(document.activeElement)) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
 }
 let prevOverflow = ''
 onMounted(() => {
+  opener = document.activeElement as HTMLElement | null
   document.addEventListener('keydown', onKey)
   prevOverflow = document.body.style.overflow
   document.body.style.overflow = 'hidden'
@@ -61,6 +80,7 @@ onUnmounted(() => {
   clearTimeout(debounce)
   document.removeEventListener('keydown', onKey)
   document.body.style.overflow = prevOverflow
+  opener?.focus() // back to "Kitleyi gör"
 })
 
 const consentTitle = (v: boolean | null) => (v === null ? 'Bilinmiyor' : v ? 'İzin var' : 'İzin yok')
@@ -69,7 +89,7 @@ const consentTitle = (v: boolean | null) => (v === null ? 'Bilinmiyor' : v ? 'İ
 <template>
   <Teleport to="body">
     <div class="drawer-backdrop" @click.self="emit('close')">
-      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="audience-drawer-title">
+      <aside ref="panel" class="drawer" role="dialog" aria-modal="true" aria-labelledby="audience-drawer-title">
         <div class="card-head">
           <span class="card-icon teal"><Icon name="users" :size="17" /></span>
           <h2 id="audience-drawer-title">

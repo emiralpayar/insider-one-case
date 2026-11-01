@@ -14,6 +14,18 @@ export const rowKey = (e: MessageError) => `${e.message_id}:${e.attempts}:${e.st
 /** Human-readable reason for a worker/provider error string. */
 export function humanReason(raw: string): string {
   const s = raw.trim()
+  // Queue-side notes appended to the provider error (dispatcher.go).
+  const notes: string[] = []
+  const gaveUp = /gave up after (\d+) rate-limited answers/.exec(s)
+  if (gaveUp) notes.push(`${gaveUp[1]} kez hız sınırına takıldı, vazgeçildi`)
+  if (/an earlier attempt may have been delivered/.test(s)) notes.push('önceki deneme ulaşmış olabilir')
+  if (notes.length) {
+    const head = humanReason(s.replace(/;.*$/, ''))
+    return [head, ...notes].join(' · ')
+  }
+  if (/^worker crashed mid-send/.test(s) || /^crashed mid-send/.test(s)) return 'Worker gönderim sırasında durdu'
+  if (/^consent revoked/.test(s)) return 'İzin gönderimden önce geri çekildi'
+
   const http = /\bHTTP (\d{3})\b/.exec(s)
   if (http) {
     switch (http[1]) {

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // Composer wizard: Brief → Kitle → İçerik → Onay. Holds the campaign and the
 // audience preview; each step component talks to the API and reports back.
-import { computed, nextTick, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import BriefStep from '../components/BriefStep.vue'
 import RuleEditor from '../components/RuleEditor.vue'
@@ -27,6 +27,17 @@ const loadError = ref('')
 const creating = ref(false)
 const createError = ref<unknown>(null)
 const dirty = ref(false)
+
+// Unsaved edits are confirmed on every way out, not only on step changes:
+// sidebar/breadcrumb links, another campaign, closing or reloading the tab.
+const LEAVE_MSG = 'Kaydedilmemiş değişiklikler var. Sayfadan çıkılsın mı?'
+onBeforeRouteLeave(() => !dirty.value || window.confirm(LEAVE_MSG))
+onBeforeRouteUpdate((to, from) => to.path === from.path || !dirty.value || window.confirm(LEAVE_MSG))
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (dirty.value) e.preventDefault()
+}
+onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
+onUnmounted(() => window.removeEventListener('beforeunload', onBeforeUnload))
 
 function reachable(s: Step | string): boolean {
   const c = campaign.value

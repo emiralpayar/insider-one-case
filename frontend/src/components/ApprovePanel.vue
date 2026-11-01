@@ -21,15 +21,27 @@ const confirmLarge = ref(false)
 const confirmDuplicate = ref(false)
 const duplicates = ref<DuplicateSend[]>([])
 const similarityCheck = ref<'off' | 'ok' | 'error'>('off')
+// Approval waits for the check: the server enforces only exact matches, the
+// LLM "similar" ones are confirmed here (DECISIONS #29).
+const duplicatesLoading = ref(true)
+let duplicatesSeq = 0
 
-// Earlier campaigns that already sent this exact text to people in this audience.
+// Earlier campaigns that already reached people in this audience with the
+// same brief/text (or a similar one, with the optional LLM check).
 async function loadDuplicates() {
+  const seq = ++duplicatesSeq
+  duplicatesLoading.value = true
   try {
     const rep = await api.duplicates(props.campaign.id)
+    if (seq !== duplicatesSeq) return // a newer check (e.g. after a channel change) is running
     duplicates.value = rep.duplicates
     similarityCheck.value = rep.similarity_check
   } catch {
-    duplicates.value = [] // the server re-checks on approve anyway
+    if (seq !== duplicatesSeq) return
+    duplicates.value = [] // the server re-checks exact matches on approve anyway
+    similarityCheck.value = 'error'
+  } finally {
+    if (seq === duplicatesSeq) duplicatesLoading.value = false
   }
 }
 const approving = ref(false)
@@ -86,6 +98,8 @@ const recipients = computed(() => {
 
 const blockReason = computed(() => {
   if (!pv.value) return 'Kitle sayıları yükleniyor…'
+  if (channelBusy.value) return 'Kanal değişikliği kaydediliyor…'
+  if (duplicatesLoading.value) return 'Tekrar gönderim kontrolü yapılıyor…'
   if (isEmpty.value) return 'Kitle boş — onay verilemez.'
   if (recipients.value === 0) return 'Seçili kanallarda izni olan alıcı yok — onay verilemez.'
   if (missingContent.value.length) return 'Açık bir kanalın içeriği yok.'

@@ -278,6 +278,11 @@ const STATUS_LABEL = MESSAGE_STATUS_LABEL
 .log-cols, .log-row { display: grid; grid-template-columns: 88px 84px 80px minmax(0, 1fr) 230px; gap: 12px; align-items: center; padding: 0 var(--space-5); }
 .log-cols { height: 34px; font-size: 11px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); background: var(--surface-2); border-bottom: 1px solid var(--border); }
 .log-list { position: relative; height: 380px; overflow-y: auto; overscroll-behavior: contain; }
+/* Narrow screens: keep the reason readable instead of squeezing it to 0px. */
+@media (max-width: 720px) {
+  .log-cols, .log-row { grid-template-columns: 64px 64px minmax(120px, 1fr) minmax(110px, 0.8fr); gap: 8px; padding: 0 var(--space-3); }
+  .log-cols > :nth-child(3), .log-row > :nth-child(3) { display: none; }
+}
 .log-row { height: 42px; border-bottom: 1px solid var(--border); background: var(--surface); font-size: 13px; }
 .log-row:hover { background: #fafbff; }
 .reason { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }

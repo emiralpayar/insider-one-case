@@ -27,6 +27,12 @@ async function load() {
   try {
     const r = await api.messages(props.campaignId, messagesQuery(filter.value))
     if (my !== seq) return
+    // Live counts can shrink the filtered total under the current page.
+    const last = Math.max(1, Math.ceil(r.total / r.per_page))
+    if (r.total > 0 && filter.value.page > last) {
+      filter.value.page = last // the deep watch reloads
+      return
+    }
     data.value = r
     error.value = ''
   } catch (e) {

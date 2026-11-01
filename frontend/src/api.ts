@@ -122,10 +122,17 @@ export async function streamContent(
     }
   })
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
-  for (;;) {
-    const { value, done: eof } = await reader.read()
-    if (eof) break
-    parser.feed(value)
+  try {
+    for (;;) {
+      const { value, done: eof } = await reader.read()
+      if (eof) break
+      parser.feed(value)
+    }
+  } catch (e) {
+    if (signal.aborted) throw e
+    // A dropped connection or a garbled event: a Turkish message, not the
+    // browser's "network error" / SyntaxError.
+    throw new ApiError(0, 'stream_closed', 'Bağlantı içerik tamamlanmadan kesildi')
   }
   if (failure) throw failure
   if (!done) throw new ApiError(0, 'stream_closed', 'Bağlantı içerik tamamlanmadan kapandı')

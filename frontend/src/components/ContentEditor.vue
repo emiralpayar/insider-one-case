@@ -84,6 +84,8 @@ async function generate(which: 'all' | Channel) {
   } catch (e) {
     if (controller?.signal.aborted) return
     if (e instanceof ApiError && e.code === 'campaign_locked') emit('locked')
+    // Drop the half-streamed text so it cannot be saved by "Onaya geç".
+    draft.value = base
     streamError.value = e
     if (e instanceof ApiError) issues.value = e.fieldErrors
   } finally {
