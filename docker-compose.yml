@@ -43,6 +43,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL_SEGMENT: ${ANTHROPIC_MODEL_SEGMENT:-claude-sonnet-5-5}
       ANTHROPIC_MODEL_CONTENT: ${ANTHROPIC_MODEL_CONTENT:-claude-sonnet-5-5}
+      DUPLICATE_LLM_CHECK: ${DUPLICATE_LLM_CHECK:-false}
     ports:
       - "8080:8080"
     depends_on:

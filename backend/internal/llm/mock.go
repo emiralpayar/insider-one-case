@@ -36,6 +36,8 @@ func (mockClient) Complete(ctx context.Context, req Request, onDelta func(string
 		v = mockRefine(cur, hintString(req.Hint, "instruction"))
 	case "content":
 		v = mockContent(hintString(req.Hint, "brief"), hintStrings(req.Hint, "channels"))
+	case "similarity":
+		v = mockSimilarity(hintString(req.Hint, "brief"), hintCandidates(req.Hint))
 	default:
 		return Response{}, fmt.Errorf("llm: mock: unknown purpose %q", req.Purpose)
 	}

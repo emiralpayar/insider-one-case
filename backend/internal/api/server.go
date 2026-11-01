@@ -39,6 +39,9 @@ type Config struct {
 	Now func() time.Time
 	// Heartbeat is the SSE keep-alive comment interval (default 15s).
 	Heartbeat time.Duration
+	// DuplicateLLMCheck turns on the optional LLM similarity check of the
+	// duplicate-send warning (DUPLICATE_LLM_CHECK, default off; DECISIONS #29).
+	DuplicateLLMCheck bool
 }
 
 // Server is the HTTP handler.
@@ -50,6 +53,7 @@ type Server struct {
 	models    Models
 	now       func() time.Time
 	heartbeat time.Duration
+	dupLLM    bool
 	router    chi.Router
 }
 
@@ -67,6 +71,7 @@ func New(cfg Config) *Server {
 		models:    cfg.Models,
 		now:       cfg.Now,
 		heartbeat: cfg.Heartbeat,
+		dupLLM:    cfg.DuplicateLLMCheck,
 	}
 	if s.now == nil {
 		s.now = time.Now

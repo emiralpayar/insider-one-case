@@ -611,3 +611,85 @@ func TestDuplicateSendNeedsConfirm(t *testing.T) {
 		t.Fatalf("approve second confirmed: %d %s", r.Code, r.Body)
 	}
 }
+
+// DUPLICATE_LLM_CHECK on: a reworded brief that reached the same people is
+// reported with the model's reason (mock: shared words); if the model fails,
+// the endpoint still answers with the exact checks and similarity_check=error.
+func TestDuplicateLLMCheck(t *testing.T) {
+	pool := seeded(t)
+	setup := newServer(t, pool, mockComposer(pool), "mock")
+	first := createCampaign(t, setup)
+	if r := do(t, setup, "POST", "/api/campaigns/"+first+"/segment/generate", nil); r.Code != 200 {
+		t.Fatalf("generate: %d %s", r.Code, r.Body)
+	}
+	if evs, _ := stream(t, setup, "/api/campaigns/"+first+"/content/stream"); evs[len(evs)-1].Type != "done" {
+		t.Fatalf("content: %+v", evs[len(evs)-1])
+	}
+	if r := do(t, setup, "POST", "/api/campaigns/"+first+"/approve", map[string]bool{"confirm_large_audience": true}); r.Code != 200 {
+		t.Fatalf("approve: %d %s", r.Code, r.Body)
+	}
+	var fc struct {
+		Rule json.RawMessage `json:"rule"`
+	}
+	do(t, setup, "GET", "/api/campaigns/"+first, nil).decode(t, &fc)
+
+	// Same audience, reworded brief, different text: no exact match.
+	r := do(t, setup, "POST", "/api/campaigns", map[string]string{"brief": brief + " Kısa tut."})
+	var sc struct {
+		ID string `json:"id"`
+	}
+	r.decode(t, &sc)
+	second := sc.ID
+	if r := do(t, setup, "PUT", "/api/campaigns/"+second+"/segment", map[string]json.RawMessage{"rule": fc.Rule}); r.Code != 200 {
+		t.Fatalf("put rule: %d %s", r.Code, r.Body)
+	}
+	content := map[string]any{"content": map[string]any{
+		"sms":   "Merhaba {{first_name}}, sepetin seni bekliyor.",
+		"email": map[string]string{"subject": "Sepetin seni bekliyor", "preheader": "", "body": "Merhaba {{first_name}}, sepetin seni bekliyor."},
+	}}
+	if r := do(t, setup, "PUT", "/api/campaigns/"+second+"/content", content); r.Code != 200 {
+		t.Fatalf("put content: %d %s", r.Code, r.Body)
+	}
+
+	type report struct {
+		Duplicates []struct {
+			CampaignID string `json:"campaign_id"`
+			Match      string `json:"match"`
+			Reason     string `json:"reason"`
+		} `json:"duplicates"`
+		SimilarityCheck string `json:"similarity_check"`
+	}
+	var off report
+	do(t, setup, "GET", "/api/campaigns/"+second+"/duplicates", nil).decode(t, &off)
+	if off.SimilarityCheck != "off" || len(off.Duplicates) != 0 {
+		t.Fatalf("flag off: %+v", off)
+	}
+
+	on := httptest.NewServer(api.New(api.Config{Pool: pool, Composer: mockComposer(pool), LLMProvider: "mock", DuplicateLLMCheck: true}))
+	t.Cleanup(on.Close)
+	var got report
+	do(t, on, "GET", "/api/campaigns/"+second+"/duplicates", nil).decode(t, &got)
+	if got.SimilarityCheck != "ok" || len(got.Duplicates) == 0 {
+		t.Fatalf("flag on: %+v", got)
+	}
+	for _, d := range got.Duplicates {
+		if d.CampaignID != first || d.Match != "similar" || !strings.HasPrefix(d.Reason, "Ortak kelimeler") {
+			t.Fatalf("duplicate: %+v", d)
+		}
+	}
+
+	bad := `{"matches":[]}` // never names the candidate: fails validation 3 times
+	broken := httptest.NewServer(api.New(api.Config{Pool: pool, LLMProvider: "mock", DuplicateLLMCheck: true,
+		Composer: &llm.Composer{SegmentClient: llm.NewScripted(bad, bad, bad), ContentClient: llm.NewMock()}}))
+	t.Cleanup(broken.Close)
+	var e report
+	res := do(t, broken, "GET", "/api/campaigns/"+second+"/duplicates", nil)
+	res.decode(t, &e)
+	if res.Code != 200 || e.SimilarityCheck != "error" || len(e.Duplicates) != 0 {
+		t.Fatalf("broken LLM: %d %+v", res.Code, e)
+	}
+	// Approval is not blocked by the LLM-only match.
+	if r := do(t, on, "POST", "/api/campaigns/"+second+"/approve", map[string]bool{"confirm_large_audience": true}); r.Code != 200 {
+		t.Fatalf("approve second: %d %s", r.Code, r.Body)
+	}
+}

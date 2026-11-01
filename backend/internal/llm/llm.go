@@ -20,7 +20,7 @@ type Client interface {
 
 // Request is a provider-neutral model request.
 type Request struct {
-	Purpose  string         `json:"purpose"` // "segment" | "refine" | "content"
+	Purpose  string         `json:"purpose"` // "segment" | "refine" | "content" | "similarity"
 	System   string         `json:"system"`
 	Messages []Message      `json:"messages"`
 	Schema   map[string]any `json:"schema"` // structured output JSON schema

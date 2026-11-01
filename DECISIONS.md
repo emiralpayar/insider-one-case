@@ -194,3 +194,14 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 **Neden:** 429 bir şey gönderilmediği anlamına gelir, bu yüzden deneme sayılmıyordu; ama sürekli 429 dönen bir provider'da mesaj sonsuza kadar kuyrukta kalıyor ve kampanya hiç bitmiyordu. 20, kısa bir hız sınırı fırtınasını atlatacak kadar büyük (her 429 kanalı `Retry-After` kadar durdurur; mesaj başına en az ~20 sn, pratikte çok daha uzun), kalıcı bir sorunu da birkaç dakikada görünür kılacak kadar küçük. `failed` doğru durum: 429'da mesajın gitmediği kesin.
 
+## 29. Tekrar gönderim uyarısına isteğe bağlı LLM benzerlik kontrolü
+
+**Karar:** `DUPLICATE_LLM_CHECK=true` (varsayılan `false`) iken onay ekranı açılırken (`GET /api/campaigns/{id}/duplicates`) Claude'a da sorulur:
+- **Kimler karşılaştırılır:** yalnızca son 30 günde onaylanmış, bu kampanyanın kitlesindeki kişilere açık bir kanalda mesaj göndermiş ve brief'i ya da metni zaten birebir eşleşmemiş kampanyalar. En yeni 10 tanesi tek bir çağrıda gönderilir; kitlesi kesişmeyen kampanyalar hiç sorulmaz.
+- **Ne sorulur:** her önceki brief için "aynı amaçlı mı" (aynı senaryo, aynı teklif, aynı duyuru) ve tek cümlelik Türkçe gerekçe. Çıktı yapılandırılmış şemayla istenir ve doğrulanır (her aday tam bir kez, bilinmeyen id yok, benzer olanın gerekçesi boş değil); hatada mevcut onarım döngüsü çalışır. Prompt'ta kampanya id'leri yerine `c1`, `c2` kullanılır, brief'ler güvenilmeyen veri olarak etiketlenir.
+- **Uyarı:** benzer bulunanlar listede "benzer amaçlı bir SMS/e-posta" olarak, altında "Claude'a göre benzer: <gerekçe>" ile görünür. Arayüz bunlar için de tekrar gönderim kutusunu ister.
+- **Hata:** Claude hata verir, zaman aşımına uğrar (20 sn) ya da key yoksa sonuç yalnızca kesin kontrolle döner (`similarity_check: "error"`), arayüz "benzer kampanya kontrolü yapılamadı" notu gösterir. Onay hiçbir durumda bu yüzden engellenmez.
+- **Sunucu tarafı:** onay endpoint'i yalnızca kesin eşleşmeler (aynı brief, aynı metin) için `confirm_duplicate` ister. LLM sonucu sunucuda zorlanmaz.
+
+**Neden:** Kesin kontrol (#27) farklı kelimelerle yazılmış aynı amaçlı brief'i yakalamaz; bu anlamsal bir karşılaştırma ve LLM'in iyi yaptığı bir iş. Her kampanyayla karşılaştırmak hem pahalı hem gereksiz: tekrar gönderim ancak aynı kişilere gidilmişse sorun, bu yüzden aday listesi önce veritabanında kitle kesişimiyle daraltılır. Kontrol isteğe bağlı ve varsayılan kapalı: her onay ekranında bir LLM çağrısı (gecikme ve maliyet) ekler ve yanlış pozitif verebilir. LLM'in kararı onay transaction'ında yeniden sorulmaz: transaction kampanya satırını kilitli tutarken dış bir ağ çağrısı yapılmamalı ve LLM'in kararı her çağrıda aynı olmayabilir. Bu yüzden LLM sonucu bir uyarıdır; zorunlu teyit yalnızca deterministik eşleşmelerde. Testler mock ile çalışır: mock iki brief'i, en az 4 harfli kelimelerinin %40'ı ortaksa benzer sayar ve ortak kelimeleri gerekçe olarak yazar.
+

@@ -230,6 +230,14 @@ export interface DuplicateSend {
   channel: Channel
   recipients: number
   approved_at: string
-  /** true: identical text on this channel; false: only the brief matched. */
-  same_text: boolean
+  /** text: identical text; brief: same brief; similar: LLM judged same purpose (see reason). */
+  match: 'text' | 'brief' | 'similar'
+  reason?: string
+}
+
+/** GET /api/campaigns/{id}/duplicates */
+export interface DuplicateReport {
+  duplicates: DuplicateSend[]
+  /** off: LLM check disabled; ok: ran; error: failed, only exact checks applied. */
+  similarity_check: 'off' | 'ok' | 'error'
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -164,8 +165,16 @@ func runAPI(dbURL string) error {
 	}
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	dupLLM := false
+	if v := os.Getenv("DUPLICATE_LLM_CHECK"); v != "" {
+		if dupLLM, err = strconv.ParseBool(v); err != nil {
+			return errors.New("DUPLICATE_LLM_CHECK must be a boolean")
+		}
+	}
+	log.Printf("duplicate warning: LLM similarity check %s", map[bool]string{true: "ON", false: "off (DUPLICATE_LLM_CHECK)"}[dupLLM])
 	handler := api.New(api.Config{
 		Pool: pool, Composer: composer, LLMProvider: provider, Models: models, Registry: reg,
+		DuplicateLLMCheck: dupLLM,
 	})
 
 	srv := &http.Server{

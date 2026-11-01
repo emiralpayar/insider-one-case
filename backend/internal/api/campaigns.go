@@ -1,14 +1,20 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/emiralpayar/campaign-composer/internal/campaign"
 	"github.com/emiralpayar/campaign-composer/internal/content"
+	"github.com/emiralpayar/campaign-composer/internal/llm"
 	"github.com/emiralpayar/campaign-composer/internal/verr"
+	"github.com/google/uuid"
 )
 
 // maxBriefRunes bounds the brief length.
@@ -175,12 +181,50 @@ func (s *Server) duplicates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	d, err := campaign.DuplicateSends(r.Context(), s.pool, c)
+	var similar campaign.SimilarFunc
+	if s.dupLLM {
+		similar = s.similarFunc(id)
+	}
+	rep, err := campaign.DuplicateSends(r.Context(), s.pool, c, similar)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"duplicates": d})
+	writeJSON(w, http.StatusOK, rep)
+}
+
+// similarityTimeout bounds the LLM check so the approval screen never waits
+// long; on timeout the exact checks still apply.
+const similarityTimeout = 20 * time.Second
+
+// similarFunc adapts Composer.Similar to campaign.SimilarFunc. Campaign ids
+// are replaced by short opaque ids ("c1", "c2") in the prompt.
+func (s *Server) similarFunc(campaignID uuid.UUID) campaign.SimilarFunc {
+	return func(ctx context.Context, brief string, cands []campaign.SimilarCandidate) (map[uuid.UUID]string, error) {
+		if s.composer == nil {
+			return nil, errors.New("llm not configured")
+		}
+		ctx, cancel := context.WithTimeout(ctx, similarityTimeout)
+		defer cancel()
+		in := make([]llm.SimilarityCandidate, len(cands))
+		byKey := map[string]uuid.UUID{}
+		for i, c := range cands {
+			key := fmt.Sprintf("c%d", i+1)
+			in[i] = llm.SimilarityCandidate{ID: key, Brief: c.Brief}
+			byKey[key] = c.ID
+		}
+		ms, err := s.composer.Similar(ctx, campaignID, brief, in)
+		if err != nil {
+			return nil, err
+		}
+		out := map[uuid.UUID]string{}
+		for _, m := range ms {
+			if m.Similar {
+				out[byKey[m.ID]] = m.Reason
+			}
+		}
+		return out, nil
+	}
 }
 
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {

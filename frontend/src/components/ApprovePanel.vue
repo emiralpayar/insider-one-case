@@ -20,11 +20,14 @@ const router = useRouter()
 const confirmLarge = ref(false)
 const confirmDuplicate = ref(false)
 const duplicates = ref<DuplicateSend[]>([])
+const similarityCheck = ref<'off' | 'ok' | 'error'>('off')
 
 // Earlier campaigns that already sent this exact text to people in this audience.
 async function loadDuplicates() {
   try {
-    duplicates.value = (await api.duplicates(props.campaign.id)).duplicates
+    const rep = await api.duplicates(props.campaign.id)
+    duplicates.value = rep.duplicates
+    similarityCheck.value = rep.similarity_check
   } catch {
     duplicates.value = [] // the server re-checks on approve anyway
   }
@@ -54,6 +57,12 @@ const isEmpty = computed(() => !!pv.value?.warnings.some((w) => w.code === 'empt
 
 const shownDuplicates = computed(() => duplicates.value.filter((d) => enabled(d.channel)))
 const CH_LABEL: Record<Channel, string> = { sms: 'SMS', email: 'e-posta' }
+const matchText = (d: DuplicateSend) =>
+  d.match === 'text'
+    ? `aynı ${CH_LABEL[d.channel]} metni`
+    : d.match === 'brief'
+      ? `aynı brief'le üretilmiş ${CH_LABEL[d.channel]}`
+      : `benzer amaçlı bir ${CH_LABEL[d.channel]}`
 const fmtDate = (s: string) => new Date(s).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long' })
 
 const missingContent = computed(() => {
@@ -243,7 +252,8 @@ async function approve() {
           <ul>
             <li v-for="d in shownDuplicates" :key="d.campaign_id + d.channel">
               <RouterLink :to="`/campaigns/${d.campaign_id}`">{{ d.name || 'İsimsiz kampanya' }}</RouterLink>
-              ({{ fmtDate(d.approved_at) }}): {{ d.same_text ? `aynı ${CH_LABEL[d.channel]} metni` : `aynı brief'le üretilmiş ${CH_LABEL[d.channel]}` }} bu kitleden {{ num(d.recipients) }} kişiye gitti.
+              ({{ fmtDate(d.approved_at) }}): {{ matchText(d) }} bu kitleden {{ num(d.recipients) }} kişiye gitti.
+              <div v-if="d.match === 'similar' && d.reason" class="small dup-reason">Claude'a göre benzer: {{ d.reason }}</div>
             </li>
           </ul>
           <label class="row" style="gap: 8px; margin-top: 6px">
@@ -251,6 +261,9 @@ async function approve() {
             <span>Aynı kişilere tekrar göndermeyi onaylıyorum.</span>
           </label>
         </div>
+      </div>
+      <div v-if="similarityCheck === 'error'" class="small muted">
+        Benzer kampanya kontrolü (Claude) şu an yapılamadı; yalnızca aynı brief ve aynı metin kontrol edildi.
       </div>
       <div v-if="approveError" class="alert alert-danger">
         <span class="alert-icon">!</span>
@@ -289,6 +302,7 @@ async function approve() {
 .stat-accent { border-color: var(--success-border); background: linear-gradient(180deg, #fff, var(--success-soft)); }
 .approve-box { border: 1px solid var(--accent-border); box-shadow: var(--shadow-md); background: linear-gradient(180deg, #fff, #fafaff); }
 .approve-box.blocked { border-color: var(--danger-border); background: linear-gradient(180deg, #fff, #fffafa); }
+.dup-reason { font-style: italic; opacity: 0.85; }
 .dup-confirm ul { margin: 6px 0 0 18px; padding: 0; }
 .large-confirm { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--warn-soft); border: 1px solid var(--warn-border); color: var(--warn-text); }
 </style>
