@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -233,6 +234,30 @@ func TestRateLimitedDoesNotConsumeAttempts(t *testing.T) {
 		if r := getMessage(t, pool, id); r.Status != "queued" || r.Attempts != 0 {
 			t.Fatalf("got %+v", r)
 		}
+	}
+}
+
+// A provider that never stops answering 429 must not keep a message queued
+// forever: after MaxRateLimited answers it fails (and attempts stay 0).
+func TestRateLimitedGivesUp(t *testing.T) {
+	pool := newDB(t, 300)
+	camp := insertCampaign(t, pool, "sending")
+	ids := insertMessages(t, pool, camp, "sms", 1)
+	mustExec(t, pool, `update users set sms_consent=true`)
+	_, srv := newMock(t, mockprovider.Config{RateLimited429: 1, Idempotency: true})
+	cp := newCounting(NewHTTPProvider(srv.URL, true, 5*time.Second))
+	d := newDispatcher(pool, cp, "sms")
+	d.MaxRateLimited = 3
+
+	stop := runAll(t, d)
+	waitFor(t, 30*time.Second, "terminal", allTerminal(t, pool, camp))
+	stop()
+	r := getMessage(t, pool, ids[0])
+	if r.Status != "failed" || r.Attempts != 0 || r.LastErr == nil || !strings.Contains(*r.LastErr, "gave up after 3") {
+		t.Fatalf("got %+v (last_error %v)", r, r.LastErr)
+	}
+	if n := cp.Total(); n != 3 {
+		t.Fatalf("provider called %d times, want 3", n)
 	}
 }
 

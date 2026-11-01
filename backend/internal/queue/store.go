@@ -20,6 +20,8 @@ type Job struct {
 	Subject        string
 	Body           string
 	Attempts       int
+	// RateLimited counts earlier 429 answers for this message.
+	RateLimited int
 	// Recovered: the row was 'sending' with an expired lease, i.e. a worker
 	// died mid-send and the earlier attempt's outcome is unknown.
 	Recovered bool
@@ -59,9 +61,9 @@ with picked as (
   from picked
   where m.id = picked.id
   returning m.id, m.campaign_id, m.user_id, m.channel, m.recipient, coalesce(m.subject, '') as subject,
-            m.body, m.attempts, picked.prev_status = 'sending' as recovered, m.locked_until
+            m.body, m.attempts, m.rate_limited, picked.prev_status = 'sending' as recovered, m.locked_until
 )
-select c.id, c.campaign_id, c.user_id, c.channel, c.recipient, c.subject, c.body, c.attempts, c.recovered, c.locked_until,
+select c.id, c.campaign_id, c.user_id, c.channel, c.recipient, c.subject, c.body, c.attempts, c.rate_limited, c.recovered, c.locked_until,
        coalesce(case c.channel when 'sms' then u.sms_consent else u.email_consent end, false) as has_consent
 from claimed c join users u on u.id = c.user_id`
 
@@ -76,7 +78,7 @@ func (s *Store) Claim(ctx context.Context, channel string, limit int, lease time
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Job, error) {
 		var j Job
 		err := r.Scan(&j.ID, &j.CampaignID, &j.UserID, &j.Channel, &j.Recipient, &j.Subject, &j.Body,
-			&j.Attempts, &j.Recovered, &j.LockedUntil, &j.HasConsent)
+			&j.Attempts, &j.RateLimited, &j.Recovered, &j.LockedUntil, &j.HasConsent)
 		return j, err
 	})
 }
@@ -119,9 +121,24 @@ func (s *Store) MarkRetry(ctx context.Context, j Job, at time.Time, refundAttemp
 		locked_until=null, last_error=$5, updated_at=now()`+fence, j.ID, j.LockedUntil, at, refundAttempt, lastErr)
 }
 
+// MarkRateLimited re-queues the message for at after a 429: the attempt is
+// refunded (nothing was sent) and the 429 counter goes up.
+func (s *Store) MarkRateLimited(ctx context.Context, j Job, at time.Time, lastErr string) error {
+	return s.exec(ctx, `update messages set status='queued', next_attempt_at=$3,
+		attempts = greatest(attempts-1, 0), rate_limited = rate_limited + 1,
+		locked_until=null, last_error=$4, updated_at=now()`+fence, j.ID, j.LockedUntil, at, lastErr)
+}
+
 // MarkFailed: certainly not delivered and will not be retried.
 func (s *Store) MarkFailed(ctx context.Context, j Job, lastErr string) error {
 	return s.markTerminal(ctx, j, "failed", lastErr, false)
+}
+
+// MarkRateLimitedOut: the provider answered 429 too many times; certainly
+// not delivered, given up. The attempt is refunded like any 429.
+func (s *Store) MarkRateLimitedOut(ctx context.Context, j Job, lastErr string) error {
+	return s.exec(ctx, `update messages set status='failed', last_error=$3, locked_until=null, updated_at=now(),
+		attempts = greatest(attempts-1, 0), rate_limited = rate_limited + 1`+fence, j.ID, j.LockedUntil, lastErr)
 }
 
 // MarkUnknown: may or may not have been delivered; will not be retried.

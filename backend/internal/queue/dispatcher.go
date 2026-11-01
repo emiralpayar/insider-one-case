@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand/v2"
 	"sync"
@@ -23,6 +24,10 @@ const (
 	defaultRetryAft = time.Second
 	maxRetryAfter   = 10 * time.Second // clamp for provider Retry-After (pause and reschedule)
 	minLeaseLeft    = 10 * time.Second // do not start a send with less lease than this left (> provider timeout)
+	// defaultMaxRateLimited bounds 429s per message: they do not consume
+	// attempts, so without a cap a provider that keeps answering 429 would
+	// keep a message queued forever (DECISIONS #28).
+	defaultMaxRateLimited = 20
 )
 
 // Dispatcher sends one channel's queued messages. Any number of Dispatchers
@@ -33,17 +38,18 @@ const (
 // Zero-valued fields get defaults when Run starts. Run must not be called
 // concurrently on the same Dispatcher value.
 type Dispatcher struct {
-	Pool         *pgxpool.Pool
-	Store        *Store
-	Provider     Provider
-	Channel      string
-	Limiter      *Limiter
-	Concurrency  int            // parallel provider calls (default 20)
-	BatchSize    int            // max rows claimed per query (default 100)
-	MaxAttempts  int            // default 5
-	Rand         func() float64 // jitter source in [0,1) (default math/rand/v2)
-	BackoffScale time.Duration  // real delay = Backoff()*BackoffScale/1s (default 1s; tests use 1ms)
-	Metrics      *metrics.Worker
+	Pool           *pgxpool.Pool
+	Store          *Store
+	Provider       Provider
+	Channel        string
+	Limiter        *Limiter
+	Concurrency    int            // parallel provider calls (default 20)
+	BatchSize      int            // max rows claimed per query (default 100)
+	MaxAttempts    int            // default 5
+	MaxRateLimited int            // 429 answers per message before it fails (default 20)
+	Rand           func() float64 // jitter source in [0,1) (default math/rand/v2)
+	BackoffScale   time.Duration  // real delay = Backoff()*BackoffScale/1s (default 1s; tests use 1ms)
+	Metrics        *metrics.Worker
 }
 
 func (d *Dispatcher) applyDefaults() {
@@ -61,6 +67,9 @@ func (d *Dispatcher) applyDefaults() {
 	}
 	if d.MaxAttempts <= 0 {
 		d.MaxAttempts = 5
+	}
+	if d.MaxRateLimited <= 0 {
+		d.MaxRateLimited = defaultMaxRateLimited
 	}
 	if d.Rand == nil {
 		d.Rand = rand.Float64
@@ -292,7 +301,11 @@ func (d *Dispatcher) process(leadCtx context.Context, j Job) {
 		ra = min(ra, maxRetryAfter)
 		d.Limiter.Pause(ra)
 		d.Metrics.RateLimitedInc(d.Channel)
-		mark("rate_limited", d.Store.MarkRetry(ctx, j, now.Add(ra), true, res.Detail))
+		if j.RateLimited+1 >= d.MaxRateLimited {
+			mark("failed", d.Store.MarkRateLimitedOut(ctx, j, fmt.Sprintf("%s; gave up after %d rate-limited answers", res.Detail, j.RateLimited+1)))
+			return
+		}
+		mark("rate_limited", d.Store.MarkRateLimited(ctx, j, now.Add(ra), res.Detail))
 	case OutcomePermanent:
 		mark("failed", d.Store.MarkFailed(ctx, j, res.Detail))
 	case OutcomeNotSent:
