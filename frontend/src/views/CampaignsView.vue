@@ -79,7 +79,7 @@ const link = (c: Campaign) => (locked(c) ? `/campaigns/${c.id}` : `/campaigns/${
       <table class="table">
         <thead>
           <tr>
-            <th>Brief</th>
+            <th>Kampanya</th>
             <th>Durum</th>
             <th>Kanallar</th>
             <th>Oluşturuldu</th>
@@ -91,7 +91,10 @@ const link = (c: Campaign) => (locked(c) ? `/campaigns/${c.id}` : `/campaigns/${
             <td style="max-width: 520px">
               <div class="row" style="gap: 12px; flex-wrap: nowrap">
                 <span class="card-icon" :class="c.status === 'completed' ? 'green' : c.status === 'sending' ? '' : 'slate'"><Icon name="megaphone" :size="15" /></span>
-                <RouterLink :to="link(c)" class="brief-link">{{ c.brief }}</RouterLink>
+                <div style="min-width: 0">
+                  <RouterLink :to="link(c)" class="name-link">{{ c.name || 'İsimsiz kampanya' }}</RouterLink>
+                  <div class="brief-line muted small" :title="c.brief">{{ c.brief }}</div>
+                </div>
               </div>
             </td>
             <td>
@@ -121,16 +124,16 @@ const link = (c: Campaign) => (locked(c) ? `/campaigns/${c.id}` : `/campaigns/${
 </template>
 
 <style scoped>
-.brief-link {
-  color: var(--text);
-  font-weight: 550;
+.name-link { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.name-link:hover { color: var(--accent-text); text-decoration: none; }
+.brief-line {
+  margin-top: 2px;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.brief-link:hover { color: var(--accent-text); text-decoration: none; }
 .card-icon { width: 32px; height: 32px; }
 .ch-pill { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
 .ch-sms { background: var(--var-name-soft); color: var(--var-name); }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
+import CampaignName from '../components/CampaignName.vue'
 import Icon from '../components/Icon.vue'
 import StatusBoard from '../components/StatusBoard.vue'
 import Stepper from '../components/Stepper.vue'
@@ -38,14 +39,14 @@ function onStatus(s: CampaignStatus) {
   <div v-else-if="!campaign" class="row muted"><span class="spinner" /> Yükleniyor…</div>
   <template v-else>
     <div class="page-head">
-      <div style="max-width: 820px">
+      <div style="min-width: 0; max-width: 820px">
         <div class="page-eyebrow">
           <RouterLink to="/"><Icon name="arrow-left" :size="13" /> Kampanyalar</RouterLink>
           <span>/</span>
-          <span class="mono">{{ campaign.id.slice(0, 8) }}</span>
+          <span>Gönderim durumu</span>
           <span v-if="campaign.llm_provider === 'mock'" class="badge badge-mock" title="Kitle ve içerik mock LLM ile üretildi, Claude ile değil">MOCK</span>
         </div>
-        <h1>Gönderim durumu</h1>
+        <CampaignName :campaign="campaign" @renamed="campaign = { ...campaign, name: $event.name }" />
         <p class="brief-line">{{ campaign.brief }}</p>
         <div class="meta">
           <span><Icon name="clock" :size="13" /> Onay: {{ dateTime(campaign.approved_at) }}</span>

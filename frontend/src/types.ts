@@ -44,6 +44,27 @@ export interface PreviewResult {
   warnings: Warning[]
 }
 
+/** segment.Member (POST /segments/members) */
+export interface Member {
+  id: number
+  first_name: string
+  last_name: string
+  city: string
+  language: 'tr' | 'en'
+  sms_consent: boolean | null
+  email_consent: boolean | null
+  order_count: number
+  total_spent: number
+}
+
+/** segment.MemberPage */
+export interface MemberPage {
+  members: Member[]
+  total: number
+  page: number
+  per_page: number
+}
+
 /** api.ruleResponse (generate / refine / PUT segment) */
 export interface RuleResponse {
   rule: Rule
@@ -114,6 +135,7 @@ export type CampaignStatus = 'draft' | 'audience_ready' | 'content_ready' | 'sen
 /** campaign.Campaign */
 export interface Campaign {
   id: string
+  name: string
   brief: string
   llm_provider: string
   channels: Channel[]
@@ -153,6 +175,29 @@ export interface MessageError {
   attempts: number
   error: string
   at: string
+}
+
+/** campaign.MessageRow (GET /campaigns/{id}/messages) */
+export interface MessageRow {
+  id: string
+  user_id: number
+  first_name: string
+  last_name: string
+  channel: Channel
+  recipient: string
+  status: MessageStatus
+  attempts: number
+  last_error: string | null
+  sent_at: string | null
+  updated_at: string
+}
+
+/** campaign.MessagePage */
+export interface MessagePage {
+  messages: MessageRow[]
+  total: number
+  page: number
+  per_page: number
 }
 
 /** campaign.StatusReport */

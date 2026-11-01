@@ -1,7 +1,7 @@
 // HTTP client for the composer API (backend/internal/api).
 import { SSEParser } from './lib/sse'
 import type {
-  AppConfig, ApproveResult, Campaign, Channel, DoneEvent, PartialContent, PreviewResult,
+  AppConfig, ApproveResult, Campaign, Channel, DoneEvent, MemberPage, MessagePage, PartialContent, PreviewResult,
   PutContentResponse, Rule, RuleResponse, StatusReport, VError, Content, ApiErrorBody,
 } from './types'
 
@@ -54,16 +54,21 @@ export const api = {
   listCampaigns: () => req<Campaign[]>('GET', '/campaigns'),
   getCampaign: (id: string) => req<Campaign>('GET', c(id)),
   createCampaign: (brief: string) => req<Campaign>('POST', '/campaigns', { brief }),
+  renameCampaign: (id: string, name: string) => req<Campaign>('PUT', c(id) + '/name', { name }),
   generateSegment: (id: string) => req<RuleResponse>('POST', c(id) + '/segment/generate'),
   refineSegment: (id: string, instruction: string) =>
     req<RuleResponse>('POST', c(id) + '/segment/refine', { instruction }),
   putSegment: (id: string, rule: Rule) => req<RuleResponse>('PUT', c(id) + '/segment', { rule }),
   preview: (rule: Rule) => req<PreviewResult>('POST', '/segments/preview', { rule }),
+  members: (rule: Rule, page: number, search: string) =>
+    req<MemberPage>('POST', '/segments/members', { rule, page, search }),
   putContent: (id: string, content: Content) => req<PutContentResponse>('PUT', c(id) + '/content', { content }),
   putChannels: (id: string, channels: Channel[]) => req<Campaign>('PUT', c(id) + '/channels', { channels }),
   approve: (id: string, confirmLargeAudience: boolean) =>
     req<ApproveResult>('POST', c(id) + '/approve', { confirm_large_audience: confirmLargeAudience }),
   status: (id: string) => req<StatusReport>('GET', c(id) + '/status'),
+  /** query: built by lib/lists messagesQuery ("?status=…&channel=…&page=…" or ""). */
+  messages: (id: string, query: string) => req<MessagePage>('GET', c(id) + '/messages' + query),
 }
 
 export interface StreamHandlers {
