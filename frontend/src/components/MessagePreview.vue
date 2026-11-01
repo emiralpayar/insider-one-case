@@ -1,33 +1,82 @@
 <script setup lang="ts">
-// Rendered previews: a real audience member and the same member without a
-// first name, side by side (render is the backend's Render, ported). SMS in a
-// phone frame, e-mail in a mail-client frame.
-import { computed } from 'vue'
+// Rendered previews of a real audience member and the same member without a
+// first name (render is the backend's Render, ported). SMS in a phone frame,
+// e-mail in a mail-client frame.
+// - default: every enabled channel × both personas (Onay adımı)
+// - tabbed: one preview at a time, with channel (enabled channels only) and
+//   persona switches (İçerik adımı, sticky column)
+import { computed, ref, watch } from 'vue'
+import { personas, pickChannel, type PersonaKey } from '../lib/preview'
 import { render } from '../lib/sms'
 import type { Channel, Content, SampleUser } from '../types'
 import Icon from './Icon.vue'
 
-const props = defineProps<{ content: Content; sample: SampleUser | null; channels: Channel[]; streaming?: boolean }>()
+const props = defineProps<{
+  content: Content
+  sample: SampleUser | null
+  channels: Channel[]
+  streaming?: boolean
+  /** Which generation is running ('all' or a single channel): the tab follows a single-channel one. */
+  streamingWhich?: 'all' | Channel | null
+  tabbed?: boolean
+}>()
 
-const variants = computed(() => {
-  const city = props.sample?.city ?? 'İstanbul'
-  const name = props.sample?.first_name ?? ''
-  return [
-    { key: 'named', title: name ? `${name} · ${city}` : `Örnek kullanıcı · ${city}`, icon: 'user', vars: { first_name: name, city } },
-    { key: 'nameless', title: `İsmi olmayan kullanıcı · ${city}`, icon: 'help', vars: { first_name: '', city } },
-  ]
-})
+const ORDER: Channel[] = ['sms', 'email']
+const CH = { sms: { label: 'SMS', icon: 'sms' }, email: { label: 'E-posta', icon: 'mail' } } as const
+
+const enabled = computed(() => ORDER.filter((c) => props.channels.includes(c)))
+const variants = computed(() => personas(props.sample))
+
+const channel = ref<Channel | null>(pickChannel(enabled.value, null, props.streamingWhich ?? null))
+watch(
+  [enabled, () => props.streamingWhich],
+  () => (channel.value = pickChannel(enabled.value, channel.value, props.streamingWhich ?? null)),
+)
+const persona = ref<PersonaKey>('named')
+
+const shownChannels = computed(() => (props.tabbed ? (channel.value ? [channel.value] : []) : enabled.value))
+const shownVariants = computed(() => (props.tabbed ? variants.value.filter((v) => v.key === persona.value) : variants.value))
 const r = (t: string, vars: Record<string, string>) => render(t, vars)
 </script>
 
 <template>
   <div class="stack-lg">
-    <div v-if="channels.includes('sms')">
-      <div class="pv-channel"><Icon name="sms" :size="14" /> SMS</div>
-      <div class="grid-2 pv-grid">
-        <div v-for="v in variants" :key="v.key" class="stack-sm">
+    <div v-if="tabbed && enabled.length" class="pv-toolbar">
+      <div v-if="enabled.length > 1" class="segmented" role="tablist" aria-label="Kanal">
+        <button
+          v-for="c in enabled"
+          :key="c"
+          type="button"
+          role="tab"
+          :aria-selected="channel === c"
+          @click="channel = c"
+        >
+          <Icon :name="CH[c].icon" :size="13" /> {{ CH[c].label }}
+        </button>
+      </div>
+      <span v-else class="pv-channel" style="margin: 0"><Icon :name="CH[enabled[0]].icon" :size="14" /> {{ CH[enabled[0]].label }}</span>
+      <div class="segmented" role="tablist" aria-label="Alıcı">
+        <button
+          v-for="v in variants"
+          :key="v.key"
+          type="button"
+          role="tab"
+          :aria-selected="persona === v.key"
+          :title="v.title"
+          @click="persona = v.key"
+        >
+          <Icon :name="v.icon" :size="13" /> {{ v.label }}
+        </button>
+      </div>
+    </div>
+
+    <div v-for="ch in shownChannels" :key="ch">
+      <div v-if="!tabbed" class="pv-channel"><Icon :name="CH[ch].icon" :size="14" /> {{ CH[ch].label }}</div>
+      <div :class="tabbed ? 'pv-single' : 'grid-2 pv-grid'">
+        <div v-for="v in shownVariants" :key="v.key" class="stack-sm">
           <div class="pv-variant"><Icon :name="v.icon" :size="13" /> {{ v.title }}</div>
-          <div class="phone">
+
+          <div v-if="ch === 'sms'" class="phone">
             <div class="phone-screen">
               <div class="phone-top">
                 <span class="phone-notch" />
@@ -42,16 +91,8 @@ const r = (t: string, vars: Record<string, string>) => render(t, vars)
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
 
-    <div v-if="channels.includes('email')">
-      <div class="pv-channel"><Icon name="mail" :size="14" /> E-posta</div>
-      <div class="grid-2 pv-grid">
-        <div v-for="v in variants" :key="v.key" class="stack-sm">
-          <div class="pv-variant"><Icon :name="v.icon" :size="13" /> {{ v.title }}</div>
-          <div class="preview-mail">
+          <div v-else class="preview-mail">
             <div class="mail-chrome"><i /><i /><i /><span>Gelen kutusu</span></div>
             <div class="preview-mail-head">
               <span class="mail-avatar">M</span>
@@ -78,4 +119,5 @@ const r = (t: string, vars: Record<string, string>) => render(t, vars)
 .pv-channel { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px; }
 .pv-variant { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
 .pv-grid { align-items: start; }
+.pv-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 </style>
