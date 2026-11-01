@@ -204,7 +204,7 @@ RETURNING ...
 Kilit süresi dolan `sending` satırları başka worker'a geçer (çökme kurtarma).
 
 ### 10.2 Rate limit (çoklu worker)
-- Kanal başına **tek gönderici**: worker `pg_try_advisory_lock(<kanal>)` ile kanalın liderliğini alır. Kilidi alan worker o kanalın token bucket'ını (100/sn) tutar, gönderimleri goroutine havuzuyla paralel yapar.
+- Kanal başına **tek gönderici**: worker `pg_try_advisory_lock(<kanal>)` ile kanalın liderliğini alır. Kilidi alan worker o kanalın hız sınırlayıcısını (100/sn, eşit aralıklı; uygulamada token bucket yerine pacing seçildi, bkz. DECISIONS #2) tutar, gönderimleri goroutine havuzuyla paralel yapar.
 - Lider çökerse DB bağlantısı kopar, kilit otomatik düşer, diğer worker devralır.
 - Böylece limit tek yerde sayılır; dağıtık sayaç gerekmez.
 
@@ -217,7 +217,7 @@ Kilit süresi dolan `sending` satırları başka worker'a geçer (çökme kurtar
 |---|---|---|
 | 2xx | evet | `sent` |
 | 2xx "duplicate" (idempotency key daha önce görülmüş) | evet (önceden) | `sent` |
-| 429 | hayır | `next_attempt_at = now + Retry-After` (yoksa backoff); **deneme hakkından düşmez**; kanalın token bucket'ı `Retry-After` kadar durdurulur ve hız geçici olarak düşürülüp kademeli artırılır |
+| 429 | hayır | `next_attempt_at = now + Retry-After` (yoksa backoff); **deneme hakkından düşmez**; kanalın hız sınırlayıcısı `Retry-After` kadar durdurulur ve hız geçici olarak düşürülüp kademeli artırılır |
 | 4xx (429 hariç) | hayır | `failed` (kalıcı hata, retry yok) |
 | bağlantı kurulamadı | hayır | backoff ile retry |
 | 5xx / timeout / istek sırasında çökme | **belirsiz** | provider idempotency destekliyorsa aynı key ile retry; desteklemiyorsa `unknown`, retry yok |

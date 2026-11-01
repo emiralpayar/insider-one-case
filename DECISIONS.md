@@ -11,24 +11,24 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 - Ölçek (birkaç bin alıcı, kanal başı 100 msg/sn) Postgres için çok küçük.
 - Daha az hareketli parça: tek bağımlılık.
 
-**Bedeli / ne zaman değişir:** Gerçek Insider ölçeğinde (milyonlarca mesaj, çok sayıda instance) kuyruk Kafka/Redis Streams'e taşınmalı. Kuyruk erişimi bir interface arkasında.
+**Bedeli / ne zaman değişir:** Gerçek Insider ölçeğinde (milyonlarca mesaj, çok sayıda instance) kuyruk Kafka/Redis Streams'e taşınmalı. Kuyruk erişimi şu an Postgres'e doğrudan bağlı: `queue.Store` somut bir tip, onay ve durum sorguları `messages` tablosunu doğrudan kullanıyor. Taşımadan önce bu erişim bir interface arkasına alınmalı. Provider tarafı zaten bir interface (`queue.Provider`).
 
 ## 2. Rate limit: kanal başına tek gönderici (advisory lock)
 
-**Karar:** Her kanal için `pg_try_advisory_lock` ile bir lider worker seçilir. Lider bellekte token bucket (100/sn) tutar ve gönderimleri goroutine'lerle paralel yapar.
+**Karar:** Her kanal için `pg_try_advisory_lock` ile bir lider worker seçilir. Lider bellekte eşit aralıklı bir hız sınırlayıcı tutar (100/sn; gönderimler arasında (1 sn + 50 ms)/hız beklenir, biriktirme ve patlama yoktur) ve gönderimleri goroutine'lerle paralel yapar.
 
 **Neden:** Limit tek yerde sayılır, dağıtık sayaç (Redis vb.) gerekmez. Lider çökerse DB oturumu kapanır, kilit otomatik düşer, başka worker devralır.
 
 **Bedeli:** Bir kanalın gönderim kapasitesi tek bir process ile sınırlı. 100/sn için fazlasıyla yeterli. Çok daha yüksek limitlerde dağıtık rate limiter gerekir.
 
-- Limiter 50 ms güvenlik payı tutar (100 gönderim 1,05 sn'ye yayılır), bu yüzden efektif tavan ≈95/sn. Provider istekleri varış zamanına göre saydığı için ağ gecikmesindeki oynamalara rağmen provider tarafındaki her 1 sn penceresinde ≤100 garanti edilir.
+- Limiter 50 ms güvenlik payı tutar (100 gönderim 1,05 sn'ye yayılır), bu yüzden efektif tavan ≈95/sn. Provider istekleri varış zamanına göre saydığı için, ağ gecikmesindeki ~50 ms'ye kadar oynamalarda provider tarafındaki her 1 sn penceresinde ≤100 korunur.
 - Kilit bağlantısı koparsa liderlik devri sırasında eski liderin uçuştaki gönderimleri (en fazla `Concurrency` adet, her biri 5 sn timeout ile sınırlı) yeni liderin ilk gönderimleriyle kısa süre çakışabilir. Bu çakışma sınırlıdır; provider'ın 429'u yedek koruma sağlar. Lider her claim öncesi kilit bağlantısını kontrol ederek bu pencereyi daraltır.
 
 ## 3. Çift gönderim > hiç gitmeme: idempotency key
 
 **Karar:** Çift SMS, hiç gitmemesinden daha kötü kabul edildi.
 - Her provider isteği `Idempotency-Key: <message_id>` taşır. Mock provider aynı key'i ikinci kez görürse göndermez, ilk sonucu döner.
-- Hatalar "kesin gitmedi" (bağlantı kurulamadı, 429, 4xx) ve "belirsiz" (5xx, timeout, istek sırasında çökme) olarak ayrılır. Kesin gitmeyenler güvenle tekrar denenir.
+- Hatalar "kesin gitmedi" (bağlantı kurulamadı, 429, diğer 4xx) ve "belirsiz" (5xx, timeout, istek sırasında çökme) olarak ayrılır. Kesin gitmeyenlerden bağlantı hatası ve 429 güvenle tekrar denenir; diğer 4xx kalıcı hata sayılır ve mesaj tekrar denenmeden `failed` olur.
 - Belirsiz durumda: provider idempotency destekliyorsa aynı key ile tekrar denenir. **Desteklemiyorsa mesaj `unknown` işaretlenir ve tekrar denenmez** (at-most-once).
 
 - Deneme hakkı biten belirsiz mesajlar `failed` değil `unknown` olur, çünkü gitmiş olabilirler.
@@ -37,13 +37,13 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 ## 4. 429 deneme hakkından düşmez, kanalı yavaşlatır
 
-**Karar:** 429'da mesaj `Retry-After` kadar ertelenir ve attempt sayılmaz. Kanalın token bucket'ı aynı süre durdurulur, hız geçici olarak düşürülüp kademeli artırılır.
+**Karar:** 429'da mesaj `Retry-After` kadar ertelenir ve attempt sayılmaz. Kanalın hız sınırlayıcısı aynı süre durdurulur; hız %70'e düşer ve her tam saniyede +10/sn artarak 100'e döner. Bir mesaj 20 kez 429 alırsa `failed` olur (#28).
 
 **Neden:** 429 mesajla değil kanalın hızıyla ilgili ve mesajın gitmediği kesin. Kanalı yavaşlatmazsak sıradaki mesajlar da 429 alır.
 
 ## 5. İzin iki kez kontrol edilir
 
-**Karar:** Onayda yalnızca izni olanlar için mesaj satırı açılır. Worker göndermeden hemen önce izni tekrar okur, geri çekilmişse `skipped_no_consent` yapar.
+**Karar:** Onayda yalnızca izni olanlar için mesaj satırı açılır. Worker işi kuyruktan alırken, aynı SQL ifadesinde izni tekrar okur; geri çekilmişse `skipped_no_consent` yapar (çökmeden kurtarılan bir satırda ise `unknown`, çünkü önceki deneme gitmiş olabilir). Okuma ile gönderim arasında yalnızca hız sınırlayıcı beklemesi vardır (429 sonrası en fazla ~10 sn).
 
 **Neden:** Onay ile gönderim arasında izin geri çekilebilir. İzinsiz mesaj hukuki risk.
 
@@ -102,7 +102,7 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 ## 14. Mock LLM: yalnızca testlerde ve açık seçimle, asla sessizce
 
-**Karar:** `LLM` interface'inin `anthropic` ve `mock` implementasyonları var. Key yoksa sistem mock'a **düşmez**: LLM endpoint'leri `503 llm_not_configured` döner ve arayüzde kırmızı bant görünür. Mock testlerde ve yalnızca `LLM_PROVIDER=mock` açıkça verildiğinde çalışır. Bu durumda arayüzde kalıcı "MOCK MOD" bandı görünür ve kampanya `llm_provider='mock'` olarak işaretlenir. Mock, onarım döngüsünü test etmek için bilinçli olarak hatalı çıktı da üretebilir.
+**Karar:** `llm.Client` interface'inin `anthropic` ve `mock` implementasyonları var. Key yoksa sistem mock'a **düşmez**: LLM endpoint'leri `503 llm_not_configured` döner ve arayüzde kırmızı bant görünür. Mock testlerde ve yalnızca `LLM_PROVIDER=mock` açıkça verildiğinde çalışır. Bu durumda arayüzde kalıcı "MOCK MOD" bandı görünür ve kampanya `llm_provider='mock'` olarak işaretlenir. Mock her zaman geçerli, deterministik çıktı üretir; onarım döngüsü hazır (geçersiz dahil) yanıtlar döndüren ayrı bir test istemcisiyle (`llm.Scripted`) test edilir.
 
 **Neden:** Key unutulursa sessiz fallback, sahte kampanya üretip gerçekmiş gibi gönderilmesine yol açar ve kimse fark etmez. Testler ise gerçek API olmadan deterministik çalışmalı.
 
@@ -142,7 +142,7 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 ## 20. Retry sonrası gönderilen mesajın hatası silinmez
 
-**Karar:** `MarkSent` `last_error`'ı temizlemez. Dashboard'daki "Son hatalar" listesi her mesajın son hatasını güncel durumuyla (ör. `sent`, 2. denemede) gösterir.
+**Karar:** `MarkSent` `last_error`'ı temizlemez. Dashboard'daki "Gönderim günlüğü" kartı her mesajın son hatasını güncel durumuyla (ör. `sent`, 2. denemede) gösterir.
 
 **Neden:** Varsayılan hata oranlarıyla yüzlerce hata yaşanıp hepsi retry ile kurtarıldığında dashboard "Hata yok" diyordu; retry mekanizması görünmez oluyordu. Pazarlamacı ve operatör için "sorun yaşandı ama kurtarıldı" bilgisi değerli. Terminal hata sayıları zaten durum dağılımında ayrı görünür.
 
@@ -160,13 +160,13 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 
 ## 23. Karşılığı olmayan kitle: kural boş kalır, uydurulmaz
 
-**Karar:** Brief'teki kitle ifadesinin hiçbir karşılığı yoksa ("VIP müşteriler") kural `filtered`, koşulsuz ve ifade `unmapped`'de olarak kabul edilir. Bu bir taslaktır: kimseyle eşleşmez (`FALSE`), `empty_audience` ve `unmapped` uyarıları görünür, pazarlamacı koşulu elle ekleyene kadar onay kapalıdır. Model çıktısı ayrıca `ValidateGenerated` ile kontrol edilir: `unmapped` doluyken `audience:"all"` ve alt sınırla `gte` koşulu (`order_count gte 0` gibi herkesi seçen yer tutucu) reddedilir.
+**Karar:** Brief'teki kitle ifadesinin hiçbir karşılığı yoksa ("VIP müşteriler") kural `filtered`, koşulsuz ve ifade `unmapped`'de olarak kabul edilir. Bu bir taslaktır: kimseyle eşleşmez (`FALSE`), `empty_audience` ve `unmapped` uyarıları görünür, pazarlamacı koşulu elle ekleyene kadar onay kapalıdır. Model çıktısı ayrıca `ValidateGenerated` ile kontrol edilir: `unmapped` doluyken `audience:"all"` reddedilir; her zaman da alan aralığının sınırındaki koşullar (`gte` minimum, `lte` maksimum; ör. `order_count gte 0`) reddedilir. Veride herkesi seçen koşullar için bkz. #26.
 
 **Neden:** Canlı denemede model doğru davranıp kuralı boş bırakmıştı, ama doğrulama "en az bir koşul" istediği için onarım turu modeli herkesi seçen bir koşul uydurmaya itti. Sessizce herkese göndermek, eksik kuralı sormaktan çok daha kötü. Bu ek kontroller yalnızca modele uygulanır; pazarlamacı elle "Tüm kullanıcılar" seçebilir.
 
 ## 24. Model içeriği brief'te olmayan vaat veremez
 
-**Karar:** Üretilen içerik stok ("stoklar tükenmeden"), kargo/teslimat, garanti, iade, hediye ve süre sınırı ("son gün", "24 saat içinde") ifadeleri için taranır. İfade brief'te (ya da aynı gruptan bir kelime: "kargo bedava" → "ücretsiz kargo") geçmiyorsa `unrequested_claim` hatası olur ve onarım döngüsüne döner. Kontrol yalnızca model çıktısına uygulanır; pazarlamacı elle istediğini yazabilir. Prompt'a da aynı kural eklendi.
+**Karar:** Üretilen içerikteki her sayı (indirim oranı, tutar, gün, tarih) brief'te aynen geçmeli: brief "%30" diyorken "%50" yazılırsa `number_not_in_brief` hatası olur ("5.000" ile "5000" eşit sayılır). Ayrıca içerik stok ("stoklar tükenmeden"), kargo/teslimat, garanti, iade, hediye ve süre sınırı ("son gün", "24 saat içinde") ifadeleri için taranır. İfade brief'te (ya da aynı gruptan bir kelime: "kargo bedava" → "ücretsiz kargo") geçmiyorsa `unrequested_claim` hatası olur ve onarım döngüsüne döner. Kontrol yalnızca model çıktısına uygulanır; pazarlamacı elle istediğini yazabilir. Prompt'a da aynı kural eklendi.
 
 **Neden:** Pazarlamacı brief'te stok ya da hızlı teslimat demediği halde model metne bu vaatleri ekledi; eval'de eski prompt'la 14 içerikten 2'sinde aynısı oldu. Gerçekte olmayan bir vaat (stok, teslimat süresi) müşteriye yanlış bilgi ve hukuki risk demek. Yalnızca prompt kuralı bunu azalttı ama sıfırlamadı, bu yüzden kontrol doğrulamada. Kelime listesi kaba bir sezgisel: her uydurmayı yakalamaz (ör. "en çok satanlar") ve nadiren yanlış pozitif verebilir; yanlış pozitifte onarım 2 turda düzelmezse hata kullanıcıya gösterilir ve metin elle düzenlenir.
 
@@ -175,4 +175,22 @@ Projedeki önemli kararlar ve gerekçeleri. Ayrıntılı tasarım: `docs/superpo
 **Karar:** Birim testleri çökmeyi veritabanında simüle eder (süresi geçmiş kira ile `sending` satır). Buna ek olarak `make chaos`, çalışan stack'te SMS lideri worker'ı gönderim ortasında `SIGKILL` ile öldürür ve devralma, kurtarma ve tek teslimatı provider'ın kendi sayaçlarıyla doğrular.
 
 **Neden:** Simülasyon kurtarma mantığını test eder ama gerçek bir süreç ölümünü (yarıda kesilen HTTP istekleri, düşen advisory lock, başka process'in devralması) test etmez. Test iki modda da geçti: idempotent provider'da yarım kalanlar aynı key ile tekrar gönderilip tek teslimatta kaldı; idempotency yokken `unknown` oldular ve tekrar gönderilmediler.
+
+## 26. Herkesi seçen koşul veriye bakılarak yakalanır
+
+**Karar:** Bir koşul tek başına tüm kullanıcıları seçiyorsa (ör. kimsenin 500 siparişi yokken `order_count lte 500`, ya da "en fazla 1000 sipariş") etkisiz sayılır. Kitle önizlemesi her koşul için ayrı bir sorguyla bunu kontrol eder ve `ineffective_condition` ("Etkisiz koşul") uyarısı gösterir; bu, pazarlamacının elle eklediği koşullar için de geçerlidir. Model çıktısında aynı kontrol (`segment.IneffectiveCheck`, `Composer.RuleCheck` üzerinden) `tautological_condition` hatası olarak onarım döngüsüne döner.
+
+**Neden:** Statik kontrol (#23) yalnızca alan aralığının sınırını (`gte 0`, `lte 1000`) yakalar; "en fazla 500 sipariş" aralık içinde olduğu halde herkesi seçer ve eşlenemeyen bir kitleyi ("VIP") gizleyebilir. Etkisiz bir koşulu kaldırmak tanımı gereği kitleyi değiştirmez, bu yüzden modelden kaldırmasını istemek güvenli. Kontrol veriye bağlı: bugün etkisiz olan koşul veri değişince daraltabilir; bu yüzden yalnızca uyarı ve model onarımı, elle eklenen koşul engellenmez.
+
+## 27. Aynı metin aynı kişilere tekrar gidecekse onayda uyarı ve teyit
+
+**Karar:** Onayda, son 30 günde onaylanmış başka bir kampanyanın **aynı brief'le** (boşluk ve büyük/küçük harf farkı yok sayılır) ya da aynı kanalda **birebir aynı metinle** (SMS metni; e-posta konu + gövde) bu kampanyanın kitlesindeki kişilere mesaj gönderip göndermediği kontrol edilir (`queued`, `sending`, `sent` ya da `unknown` mesajlar). Varsa onay ekranında hangi kampanyayla, kaç kişiye gittiği listelenir ve "Aynı kişilere tekrar göndermeyi onaylıyorum" kutusu işaretlenmeden onay verilmez. Backend aynı kontrolü onay transaction'ında tekrarlar (`confirm_duplicate`, aksi halde `422 duplicate_not_confirmed`).
+
+**Neden:** Aynı brief'le ikinci kampanya açmak kolay ve sonucu (aynı kişiye aynı mesajın iki kez gitmesi) kullanıcı için rahatsız edici, marka için maliyetli. Engellemek yerine teyit istendi: bilinçli tekrar (hatırlatma) meşru olabilir. Yalnızca metin eşitliğine bakmak yetmez: Claude aynı brief'ten her seferinde biraz farklı metin üretir, bu yüzden aynı brief de eşleşme sayılır. Brief'i farklı yazılmış ama aynı amaçlı bir kampanya yakalanmaz. Daha geniş bir çözüm (kişi başına frekans sınırı, "son X günde kampanya almış olanları hariç tut" koşulu) kapsam dışı. İki kampanya tam aynı anda onaylanırsa ikisi de birbirinin henüz commit edilmemiş mesajlarını görmez; bu yarış uyarı amaçlı bir kontrol için kabul edildi.
+
+## 28. 429 sınırsız beklemez: mesaj başına 20 429'dan sonra `failed`
+
+**Karar:** Her mesajın kaç kez 429 aldığı `messages.rate_limited` sütununda sayılır. 429 deneme hakkından düşmez (#3), ama 20. 429'da mesaj `failed` olur (`last_error`: "... gave up after 20 rate-limited answers"). Sınır `Dispatcher.MaxRateLimited` ile değiştirilebilir.
+
+**Neden:** 429 bir şey gönderilmediği anlamına gelir, bu yüzden deneme sayılmıyordu; ama sürekli 429 dönen bir provider'da mesaj sonsuza kadar kuyrukta kalıyor ve kampanya hiç bitmiyordu. 20, kısa bir hız sınırı fırtınasını atlatacak kadar büyük (her 429 kanalı `Retry-After` kadar durdurur; mesaj başına en az ~20 sn, pratikte çok daha uzun), kalıcı bir sorunu da birkaç dakikada görünür kılacak kadar küçük. `failed` doğru durum: 429'da mesajın gitmediği kesin.
 
